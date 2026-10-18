@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from contextlib import closing, contextmanager
-import json
 import os
 from pathlib import Path
 import sqlite3
@@ -61,6 +60,25 @@ def read_identity(path):
         raw = stream.read(m.MAX_REQUEST + 1)
         m.require(len(raw) <= m.MAX_REQUEST, "Store identity exceeds its limit", "STORE_INVALID")
         return raw
+
+
+def read_database_identity(db):
+    # Bound SQLite's materialization before a stored value reaches Python.
+    # Leave room for the row around the 256 KiB JSON, then restore the limit
+    # so unrelated records and retained diagnostics keep their own contracts.
+    previous = db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+    db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, min(previous, m.MAX_RESPONSE))
+    try:
+        saved = db.execute("SELECT value FROM metadata WHERE key='identity'").fetchone()
+    finally:
+        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, previous)
+    m.require(saved is not None and type(saved[0]) is str,
+              "Stored database identity must be JSON text", "STORE_INVALID")
+    try:
+        return m.decode(saved[0].encode("utf-8"))
+    except m.KnowledgeError as exc:
+        raise m.KnowledgeError("STORE_INVALID", "Stored database identity cannot be decoded",
+                               "not_applicable") from exc
 
 
 def private_directory(path):
@@ -168,8 +186,7 @@ class Database:
             m.require(db.execute("PRAGMA application_id").fetchone()[0] == APP_ID
                       and db.execute("PRAGMA user_version").fetchone()[0] == 1,
                       "Database format differs", "STORE_INVALID")
-            saved = db.execute("SELECT value FROM metadata WHERE key='identity'").fetchone()
-            m.require(saved is not None and json.loads(saved[0]) == self.identity,
+            m.require(read_database_identity(db) == self.identity,
                       "Database identity differs", "STORE_INVALID")
             return db
         except BaseException:
