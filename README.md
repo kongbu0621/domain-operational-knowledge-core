@@ -22,12 +22,15 @@
 
 ## 与其他组件的关系
 
-| 组件 | 主要责任 |
+本仓仍处于设计阶段。下表说明职责与计划中的协作方式，尚不代表这些知识消费路径已经接通。
+
+| 组件 | 主要职责与本仓关系 |
 | --- | --- |
-| **domain-operational-knowledge-core（K）** | 运行知识的候选、版本、适用范围、使用反馈与生命周期 |
-| [infra-artifact-ledger](https://github.com/kongbu0621/infra-artifact-ledger) | 保存原始材料的身份、版本、实际内容和来源，供知识记录精确引用 |
-| [control-production-plane（P）](https://github.com/kongbu0621/control-production-plane) | 推进生产任务；可读取已准入知识，并回流带运行来源的候选与效果 |
-| 独立应用或 Agent | 通过公共接口提交材料、查询知识和记录使用，不依赖 P 的内部对象 |
+| **domain-operational-knowledge-core（K）** | 管理运行知识的候选、明确审查、版本、适用范围、使用反馈及修订与退休 |
+| [infra-artifact-ledger](https://github.com/kongbu0621/infra-artifact-ledger) | 计划中的原始材料存储：K 经公共接口保存、读取准确制品版本并核对内容；知识状态与使用记录仍由 K 自己保存 |
+| [control-production-plane（P）](https://github.com/kongbu0621/control-production-plane) | 计划中的消费者与材料提供方：推进生产任务，读取已准入的知识版本，回流带运行来源的候选与使用效果 |
+| [infra-local-hand](https://github.com/kongbu0621/infra-local-hand) | 计划中的间接材料来源：执行结果经 P 或其他调用方组织，原件保存到 Ledger 后可被 K 的运行材料引用；K 本身不执行任务，也不要求安装 Local Hand |
+| 独立应用或 Agent | 拟通过同一公共接口提交材料、查询知识和记录使用，不依赖 P 的内部对象 |
 
 `domain-` 表示这里拥有运行知识的领域对象和状态含义。原始材料内容由 Ledger 保存，知识状态与使用记录由 K 自己保存，任务推进由 `control-` 组件承担。K 和 P 可以独立建设，也可以通过明确接口组合。
 
