@@ -126,6 +126,23 @@ class Database:
         except (ValueError, TypeError, AttributeError) as exc:
             raise m.KnowledgeError("STORE_INVALID", "Stored identity cannot be decoded", "not_applicable") from exc
 
+    def _connect_checked(self, mode):
+        db = sqlite3.connect(self.path.as_uri() + "?mode=" + mode,
+                             uri=True, isolation_level=None, timeout=1)
+        try:
+            db.execute("PRAGMA foreign_keys=ON")
+            db.execute("PRAGMA synchronous=FULL")
+            m.require(db.execute("PRAGMA application_id").fetchone()[0] == APP_ID
+                      and db.execute("PRAGMA user_version").fetchone()[0] == 1,
+                      "Database format differs", "STORE_INVALID")
+            saved = db.execute("SELECT value FROM metadata WHERE key='identity'").fetchone()
+            m.require(saved is not None and json.loads(saved[0]) == self.identity,
+                      "Database identity differs", "STORE_INVALID")
+            return db
+        except BaseException:
+            db.close()
+            raise
+
     @contextmanager
     def connection(self, *, write=False):
         db = None
@@ -135,21 +152,28 @@ class Database:
             regular(self.root / "identity.json")
             m.require((self.root / "identity.json").read_bytes() == self.identity_bytes,
                       "Store identity changed", "STORE_INVALID")
-            db = sqlite3.connect(self.path.as_uri() + ("?mode=rw" if write else "?mode=ro"),
-                                 uri=True, isolation_level=None, timeout=1)
-            db.execute("PRAGMA foreign_keys=ON")
-            db.execute("PRAGMA synchronous=FULL")
-            m.require(db.execute("PRAGMA application_id").fetchone()[0] == APP_ID
-                      and db.execute("PRAGMA user_version").fetchone()[0] == 1,
-                      "Database format differs", "STORE_INVALID")
-            saved = db.execute("SELECT value FROM metadata WHERE key='identity'").fetchone()
-            m.require(saved is not None and json.loads(saved[0]) == self.identity,
-                      "Database identity differs", "STORE_INVALID")
+            try:
+                db = self._connect_checked("rw" if write else "ro")
+            except sqlite3.Error as exc:
+                if write or getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_READONLY_ROLLBACK:
+                    raise
+                # SQLite found an interrupted transaction whose pages must be
+                # rolled back before any reads. Retry once on this same existing
+                # store; SQLite owns recovery and locking, never delete journals.
+                regular(self.path)
+                regular(self.root / "identity.json")
+                m.require((self.root / "identity.json").read_bytes() == self.identity_bytes,
+                          "Store identity changed", "STORE_INVALID")
+                journal = self.path.with_name(self.path.name + "-journal")
+                if journal.exists() or journal.is_symlink():
+                    regular(journal)
+                db = self._connect_checked("rw")
             if write:
                 pages = MAX_DATABASE // db.execute("PRAGMA page_size").fetchone()[0]
                 db.execute(f"PRAGMA max_page_count={pages}")
                 db.execute("BEGIN IMMEDIATE")
             else:
+                db.execute("PRAGMA query_only=ON")
                 db.execute("BEGIN")
             yield db
             if write:
@@ -157,8 +181,14 @@ class Database:
                 db.commit()
         except sqlite3.Error as exc:
             code = getattr(exc, "sqlite_errorcode", 0) & 255
-            name = "BUSY" if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) else (
-                "LIMIT" if code == sqlite3.SQLITE_FULL else "STORE_INVALID")
+            if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                name = "BUSY"
+            elif code == sqlite3.SQLITE_FULL:
+                name = "LIMIT"
+            elif code in (sqlite3.SQLITE_READONLY, sqlite3.SQLITE_PERM, sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_IOERR):
+                name = "IO_ERROR"
+            else:
+                name = "STORE_INVALID"
             raise m.KnowledgeError(name, "Local database operation failed",
                                    "unknown" if committing else ("not_committed" if write else "not_applicable")) from exc
         except OSError as exc:

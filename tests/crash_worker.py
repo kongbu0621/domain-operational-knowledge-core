@@ -3,6 +3,7 @@ import contextlib
 import json
 from pathlib import Path
 import signal
+import sqlite3
 import sys
 import time
 
@@ -30,7 +31,17 @@ if checkpoint in ("after_create", "after_append"):
         return result
 
     MaterialLedger._ensure_operation = hook
-elif checkpoint == "before_local_commit":
+elif checkpoint in ("before_local_commit", "during_local_write"):
+    if checkpoint == "during_local_write":
+        connect = sqlite3.connect
+
+        def small_cache(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            db.execute("PRAGMA cache_size=8")
+            return db
+
+        sqlite3.connect = small_cache
+
     original = Knowledge._commit
 
     def hook(self, *args):
