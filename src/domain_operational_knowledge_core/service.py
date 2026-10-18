@@ -42,6 +42,7 @@ def initialize(path, *, ledger_path, anchor_artifact_id):
     return Knowledge(initialize_database(path, binding))
 
 
+@read_only
 def open_store(path):
     return Knowledge(Database(path))
 

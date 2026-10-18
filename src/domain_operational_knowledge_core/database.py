@@ -34,10 +34,12 @@ CREATE TABLE failures (sequence INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT 
 """
 
 
-def regular(path):
+def regular(path, *, missing_ok=False):
     try:
         info = path.lstat()
     except FileNotFoundError as exc:
+        if missing_ok:
+            return
         raise m.KnowledgeError("STORE_INVALID", "Existing store file is missing", "not_applicable") from exc
     m.require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.geteuid()
               and info.st_mode & 0o077 == 0, "Expected an owned private regular file", "STORE_INVALID")
@@ -127,6 +129,11 @@ class Database:
             raise m.KnowledgeError("STORE_INVALID", "Stored identity cannot be decoded", "not_applicable") from exc
 
     def _connect_checked(self, mode):
+        # SQLite can recover a hot journal before identity verification on a
+        # write-capable connection. Guard every connection, including
+        # writes from long-lived handles, before SQLite can access the sidecar.
+        # A concurrent commit may have removed it; absence is normal.
+        regular(self.path.with_name(self.path.name + "-journal"), missing_ok=True)
         db = sqlite3.connect(self.path.as_uri() + "?mode=" + mode,
                              uri=True, isolation_level=None, timeout=1)
         try:
@@ -164,9 +171,6 @@ class Database:
                 regular(self.root / "identity.json")
                 m.require((self.root / "identity.json").read_bytes() == self.identity_bytes,
                           "Store identity changed", "STORE_INVALID")
-                journal = self.path.with_name(self.path.name + "-journal")
-                if journal.exists() or journal.is_symlink():
-                    regular(journal)
                 db = self._connect_checked("rw")
             if write:
                 pages = MAX_DATABASE // db.execute("PRAGMA page_size").fetchone()[0]

@@ -154,9 +154,15 @@ class JournalRecoveryTests(unittest.TestCase):
             self.kill(child)
         retained = self.path.read_bytes(), self.journal.read_bytes()
         self.journal.chmod(0o644)
-        self.failure("STORE_INVALID", lambda: open_store(self.path.parent))
-        self.assertEqual((self.path.read_bytes(), self.journal.read_bytes()), retained)
+        for expected_state, call in (
+                ("not_applicable", lambda: open_store(self.path.parent)),
+                ("not_applicable", lambda: self.store.get_operation("example:operator", "publish_material", "request:one")),
+                ("not_committed", lambda: self.store.execute(encode(self.proposed())))):
+            error = self.failure("STORE_INVALID", call)
+            self.assertEqual(error.commit_state, expected_state)
+            self.assertEqual((self.path.read_bytes(), self.journal.read_bytes()), retained)
         self.journal.chmod(0o600)
+        self.assertEqual(self.store.execute(encode(self.proposed()))["status"], "COMMITTED")
         self.assertEqual(open_store(self.path.parent).get_operation("example:operator", "publish_material", "request:one")["receipt"], self.first["receipt"])
 
     def test_wrong_format_does_not_trigger_a_write_fallback(self):
@@ -172,4 +178,65 @@ class JournalRecoveryTests(unittest.TestCase):
         with patch.object(Database, "_connect_checked", observe):
             self.failure("STORE_INVALID", lambda: open_store(self.path.parent))
         self.assertEqual(modes, ["ro"])
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_journal_links_and_special_files_are_rejected_before_sqlite_access(self):
+        target = self.root / "retained-journal"
+        target.write_bytes(b"Retained synthetic bytes, not a SQLite journal")
+        target.chmod(0o600)
+        original = target.read_bytes()
+        for kind in ("symlink", "hardlink", "fifo", "directory", "dangling_symlink"):
+            with self.subTest(kind=kind):
+                if kind == "symlink":
+                    self.journal.symlink_to(target)
+                elif kind == "hardlink":
+                    os.link(target, self.journal)
+                elif kind == "fifo":
+                    os.mkfifo(self.journal, 0o600)
+                elif kind == "directory":
+                    self.journal.mkdir(mode=0o700)
+                else:
+                    self.journal.symlink_to(self.root / "absent")
+                try:
+                    with patch("sqlite3.connect", side_effect=AssertionError("Unsafe journal reached SQLite")):
+                        self.failure("STORE_INVALID", lambda: open_store(self.path.parent))
+                        self.failure("STORE_INVALID", lambda: self.store.execute(encode(self.proposed())))
+                    self.assertEqual(self.path.read_bytes(), self.original_bytes)
+                    self.assertEqual(target.read_bytes(), original)
+                finally:
+                    if kind == "directory":
+                        self.journal.rmdir()
+                    else:
+                        self.journal.unlink()
+        self.assertEqual(self.store.execute(encode(self.proposed()))["status"], "COMMITTED")
+
+    def test_journal_removed_by_completed_writer_does_not_block_open(self):
+        # Model a commit removing its zero-header journal just before lstat.
+        self.journal.write_bytes(b"\x00" * 512)
+        self.journal.chmod(0o600)
+        original, removed = Path.lstat, []
+
+        def after_commit(path, *args, **kwargs):
+            if path == self.journal and not removed:
+                self.journal.unlink()
+                removed.append(True)
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, "lstat", after_commit):
+            self.assertEqual(open_store(self.path.parent).get_operation("example:operator", "publish_material", "request:one")["receipt"], self.first["receipt"])
+        self.assertTrue(removed)
+        self.assertEqual(self.path.read_bytes(), self.original_bytes)
+
+    def test_open_store_errors_are_read_only_observations(self):
+        self.path.parent.chmod(0o755)
+        try:
+            error = self.failure("STORE_INVALID", lambda: open_store(self.path.parent))
+            self.assertEqual(error.commit_state, "not_applicable")
+        finally:
+            self.path.parent.chmod(0o700)
+        with sqlite3.connect(self.path) as db:
+            db.execute("PRAGMA user_version=2")
+        before = self.path.read_bytes()
+        error = self.failure("STORE_INVALID", lambda: open_store(self.path.parent))
+        self.assertEqual(error.commit_state, "not_applicable")
         self.assertEqual(self.path.read_bytes(), before)
