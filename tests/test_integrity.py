@@ -1,5 +1,6 @@
 """Corrupt only disposable fixtures; observe public refusal and no new writes."""
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -156,18 +157,15 @@ class IntegrityTests(unittest.TestCase):
         self.assertEqual(self.store.get("version", accepted["version_id"])["record"]["content"], body["content"])
 
     def test_identity_read_permission_error_is_classified_and_recoverable(self):
+        if os.geteuid() == 0:
+            self.skipTest("Permission denial requires an ordinary user")
         identity = self.root / "knowledge/identity.json"
-        from unittest.mock import patch
-        original = Path.read_bytes
-
-        def blocked(path):
-            if path == identity:
-                raise PermissionError("Synthetic identity read denial")
-            return original(path)
-
-        with patch.object(Path, "read_bytes", blocked):
+        identity.chmod(0o000)
+        try:
             error = self.failure("IO_ERROR", lambda: open_store(self.root / "knowledge"))
             self.assertEqual(error.commit_state, "not_applicable")
+        finally:
+            identity.chmod(0o600)
         self.assertEqual(open_store(self.root / "knowledge").query("build-guidance", {})["versions"], [])
 
     def test_existing_handles_recheck_directory_before_read_or_publication(self):

@@ -34,6 +34,11 @@ CREATE TABLE failures (sequence INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT 
 """
 
 
+def check_regular(info):
+    m.require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.geteuid()
+              and info.st_mode & 0o077 == 0, "Expected an owned private regular file", "STORE_INVALID")
+
+
 def regular(path, *, missing_ok=False):
     try:
         info = path.lstat()
@@ -41,8 +46,21 @@ def regular(path, *, missing_ok=False):
         if missing_ok:
             return
         raise m.KnowledgeError("STORE_INVALID", "Existing store file is missing", "not_applicable") from exc
-    m.require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.geteuid()
-              and info.st_mode & 0o077 == 0, "Expected an owned private regular file", "STORE_INVALID")
+    check_regular(info)
+
+
+def read_identity(path):
+    regular(path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        check_regular(info)
+        m.require(info.st_size <= m.MAX_REQUEST, "Store identity exceeds its limit", "STORE_INVALID")
+        # Bound the actual read too: the file may grow after fstat. Never let
+        # a retained handle's marker comparison become an unbounded read.
+        raw = stream.read(m.MAX_REQUEST + 1)
+        m.require(len(raw) <= m.MAX_REQUEST, "Store identity exceeds its limit", "STORE_INVALID")
+        return raw
 
 
 def private_directory(path):
@@ -106,10 +124,7 @@ class Database:
         self.path = self.root / "knowledge.sqlite"
         try:
             private_directory(self.root)
-            regular(self.root / "identity.json")
-            m.require((self.root / "identity.json").stat().st_size <= m.MAX_REQUEST,
-                      "Store identity exceeds its limit", "STORE_INVALID")
-            raw = (self.root / "identity.json").read_bytes()
+            raw = read_identity(self.root / "identity.json")
             self.identity = m.decode(raw)
             m.fields(self.identity, "schema store_id ledger")
             m.require(self.identity["schema"] == m.SCHEMA, "Unsupported store schema", "UNSUPPORTED_VERSION")
@@ -138,8 +153,7 @@ class Database:
     def _connect_checked(self, mode):
         private_directory(self.root)
         regular(self.path)
-        regular(self.root / "identity.json")
-        m.require((self.root / "identity.json").read_bytes() == self.identity_bytes,
+        m.require(read_identity(self.root / "identity.json") == self.identity_bytes,
                   "Store identity changed", "STORE_INVALID")
         # SQLite can recover a hot journal before identity verification on a
         # write-capable connection. Guard every connection, including
