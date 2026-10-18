@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "domain-operational-knowledge-core"
-version = "0.1.0a1"
-description = "Local operational knowledge candidates, explicit review and exact-version material references"
+version = "0.1.0a2"
+description = "Local operational knowledge review, adoption, feedback, revision and retirement"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"

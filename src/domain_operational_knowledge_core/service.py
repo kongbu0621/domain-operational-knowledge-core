@@ -1,4 +1,4 @@
-"""Material -> candidate -> explicit review -> exact active knowledge."""
+"""Public knowledge lifecycle and recoverable Ledger material publication."""
 from __future__ import annotations
 
 import base64
@@ -9,7 +9,9 @@ import time
 import uuid
 
 from . import model as m
-from .database import Database, initialize as initialize_database
+from . import records
+from .database import Database, initialize as initialize_database, lifecycle_required, install_lifecycle
+from .lifecycle import Lifecycle
 from .ledger import MaterialLedger, capture_binding
 
 
@@ -47,11 +49,19 @@ def open_store(path):
     return Knowledge(Database(path))
 
 
-class Knowledge:
+class Knowledge(Lifecycle):
     def __init__(self, database):
         self.database = database
         identity = database.identity
         self.ledger = MaterialLedger(identity["ledger"], identity["store_id"])
+
+    @writing
+    def upgrade(self):
+        with self.database.connection(write=True) as db:
+            previous = db.execute("PRAGMA user_version").fetchone()[0]
+            if previous == 1:
+                install_lifecycle(db)
+        return dict(store_id=self.database.identity["store_id"], format_version=2, upgraded=previous == 1)
 
     def _receipt(self, db, key, fingerprint):
         receipt = self.database.receipt(db, key)
@@ -72,39 +82,47 @@ class Knowledge:
         # A logical material has one creating request; later keys only reuse it.
         rows = db.execute("""SELECT key FROM receipts
             WHERE CASE WHEN json_valid(document) THEN
-                  json_extract(document, '$.operation') IN ('publish_material', 'register_material')
+                  json_extract(document, '$.operation') IN ('publish_material', 'register_material', 'complete_use', 'correct_feedback')
               AND json_extract(document, '$.result.material_id')=?
               AND json_extract(document, '$.result.reused')=0 ELSE 0 END LIMIT 2""", (identity,)).fetchall()
         m.require(len(rows) == 1, "Material creating receipt is missing or ambiguous", "STORE_INVALID")
         origin = self.database.receipt(db, rows[0][0])
         m.require(origin["scope"] == material["scope"], "Material source scope differs", "STORE_INVALID")
         fingerprint = db.execute("SELECT fingerprint FROM materials WHERE id=?", (identity,)).fetchone()[0]
-        snapshot = material, origin, fingerprint
+        feedback = (records.related(db, "feedback", origin["result"]["feedback_id"])
+                    if origin["operation"] in ("complete_use", "correct_feedback") else None)
+        snapshot = material, origin, fingerprint, feedback
         if origin["operation"] == "register_material":
             self._verify_material_binding(snapshot)
         return snapshot
 
     def _verify_material_binding(self, snapshot, *, text=None):
-        material, origin, fingerprint = snapshot
+        material, origin, fingerprint, feedback = snapshot
         body = {key: value for key, value in material.items() if key not in ("scope", "recorded_at")}
-        if origin["operation"] == "publish_material":
+        if origin["operation"] in m.PUBLICATIONS:
             del body["reference"]
             body["text"] = text
+        if origin["operation"] in ("complete_use", "correct_feedback"):
+            m.require(feedback["material_id"] == material["material_id"]
+                      and feedback["scope"] == origin["scope"], "Feedback material origin differs", "STORE_INVALID")
+            body = dict(usage_id=feedback["usage_id"], material=body)
+            if origin["operation"] == "correct_feedback":
+                body["expected_feedback_id"] = feedback["predecessor_id"]
         original = dict(schema=m.SCHEMA, scope=origin["scope"], operation=origin["operation"],
                         request_id=origin["request_id"], body=body)
         m.require(m.digest([origin["scope"], origin["operation"], body]) == fingerprint
                   and m.digest(original) == origin["fingerprint"],
                   "Material differs from its creating request", "STORE_INVALID")
-        if origin["operation"] == "publish_material":
+        if origin["operation"] in m.PUBLICATIONS:
             key = m.operation_key(origin["scope"], origin["operation"], origin["request_id"])
-            expected = self.ledger.requests(key, body)[3]
+            expected = self.ledger.requests(key, m.material_body(original))[3]
             m.require(material["reference"] == expected, "Published material version differs from its original request", "STORE_INVALID")
 
     def _read_material(self, snapshot):
-        material, origin, _ = snapshot
+        material, origin, _, _ = snapshot
         entries = self.ledger.read(material["reference"], material["task_ref"])
         text = None
-        if origin["operation"] == "publish_material":
+        if origin["operation"] in m.PUBLICATIONS:
             m.require(len(entries) == 1 and entries[0][0] == "@blob", "Published material root differs", "STORE_INVALID")
             try:
                 text = entries[0][1].decode("utf-8")
@@ -131,14 +149,15 @@ class Knowledge:
         return False
 
     def _save_material(self, db, request, reference):
-        body = request["body"]
+        body = m.material_body(request)
         document = {key: value for key, value in body.items() if key != "text"}
         document.update(reference=reference, scope=request["scope"], recorded_at=int(time.time()))
-        db.execute("INSERT INTO materials VALUES (?,?,?)", (body["material_id"], m.digest([request["scope"], request["operation"], body]),
+        db.execute("INSERT INTO materials VALUES (?,?,?)", (body["material_id"], m.digest([request["scope"], request["operation"], request["body"]]),
                                                            m.canonical(document).decode()))
 
     def _publish(self, request, key, fingerprint):
-        body = request["body"]
+        body = m.material_body(request)
+        feedback = request["operation"] != "publish_material"
         logical = m.digest([request["scope"], request["operation"], body])
         with self.database.connection(write=True) as db:
             old = self._receipt(db, key, fingerprint)
@@ -146,13 +165,30 @@ class Knowledge:
                 return old, True
             original = self.database.pending(db, key)
             m.require(original is None or m.digest(original) == fingerprint, "Pending request ID binds different content", "CONFLICT")
-            if self._material_identity(db, body, logical):
+            if feedback:
+                lifecycle_required(db)
+                reused = self._feedback_existing(db, request)
+                if reused is not None:
+                    return self._commit(db, request, key, fingerprint, reused), False
+                self._feedback_precondition(db, request)
+                m.require(not db.execute("SELECT 1 FROM materials WHERE id=?", (body["material_id"],)).fetchone(),
+                          "Feedback requires its own new material ID", "CONFLICT")
+                slot = self._feedback_slot(request)
+                reservation = db.execute("SELECT key FROM feedback_reservations WHERE slot=?", (slot,)).fetchone()
+                m.require(reservation is None or reservation[0] == key,
+                          "Feedback has an original pending request; resume it", "PENDING")
+            elif self._material_identity(db, body, logical):
                 return self._commit(db, request, key, fingerprint, dict(material_id=body["material_id"], reused=True)), False
             pending = db.execute("SELECT key,fingerprint FROM pending WHERE material_id=?", (body["material_id"],)).fetchone()
             if pending:
                 m.require(pending == (key, fingerprint), "Material has an original pending request; resume that request", "PENDING")
             else:
                 db.execute("INSERT INTO pending VALUES (?,?,?,?)", (key, body["material_id"], fingerprint, m.canonical(request).decode()))
+                if feedback:
+                    db.execute("INSERT INTO feedback_reservations VALUES (?,?)", (slot, key))
+            if feedback:
+                m.require(db.execute("SELECT key FROM feedback_reservations WHERE slot=?", (slot,)).fetchone() == (key,),
+                          "Feedback reservation differs", "STORE_INVALID")
         try:
             reference = self.ledger.publish(key, body)
             with self.database.connection(write=True) as db:
@@ -161,8 +197,15 @@ class Knowledge:
                     return old, True
                 pending = self.database.pending(db, key)
                 m.require(pending is not None and m.digest(pending) == fingerprint, "Original pending material changed", "STORE_INVALID")
+                if feedback:
+                    self._feedback_precondition(db, request)
+                    m.require(db.execute("SELECT key FROM feedback_reservations WHERE slot=?", (slot,)).fetchone() == (key,),
+                              "Feedback reservation differs", "STORE_INVALID")
                 self._save_material(db, request, reference)
-                receipt = self._commit(db, request, key, fingerprint, dict(material_id=body["material_id"], reused=False))
+                result = self._save_feedback(db, request) if feedback else dict(material_id=body["material_id"], reused=False)
+                receipt = self._commit(db, request, key, fingerprint, result)
+                if feedback:
+                    db.execute("DELETE FROM feedback_reservations WHERE key=?", (key,))
                 db.execute("DELETE FROM pending WHERE key=?", (key,))
                 return receipt, False
         except m.KnowledgeError as exc:
@@ -182,7 +225,7 @@ class Knowledge:
         request = m.request(request_utf8)
         key = m.operation_key(request["scope"], request["operation"], request["request_id"])
         fingerprint = m.digest(request)
-        if request["operation"] == "publish_material":
+        if request["operation"] in m.PUBLICATIONS:
             receipt, replayed = self._publish(request, key, fingerprint)
         else:
             with self.database.connection(write=True) as db:
@@ -190,6 +233,8 @@ class Knowledge:
                 replayed = receipt is not None
                 if receipt is None:
                     body = request["body"]
+                    if request["operation"] in m.LIFECYCLE_OPERATIONS:
+                        lifecycle_required(db)
                     if request["operation"] == "register_material":
                         logical = m.digest([request["scope"], request["operation"], body])
                         reused = self._material_identity(db, body, logical)
@@ -199,10 +244,14 @@ class Knowledge:
                             self.ledger.read(body["reference"], body["task_ref"])
                             self._save_material(db, request, body["reference"])
                         result = dict(material_id=body["material_id"], reused=reused)
-                    elif request["operation"] == "propose":
+                    elif request["operation"] in ("propose", "propose_revision"):
                         result = self._propose(db, request)
-                    else:
+                    elif request["operation"] == "review":
                         result = self._review(db, body)
+                    elif request["operation"] == "start_use":
+                        result = self._start_use(db, request)
+                    else:
+                        result = self._retire(db, body)
                     receipt = self._commit(db, request, key, fingerprint, result)
         return self._committed_result(receipt, replayed)
 
@@ -223,6 +272,11 @@ class Knowledge:
             self.database.document(db, "candidates", row[0])
             m.require(row[1] == fingerprint, "Proposal ID already binds different content", "CONFLICT")
             return dict(candidate_id=row[0], candidate_sha256=fingerprint, reused=True)
+        if request["operation"] == "propose_revision":
+            previous = self._active_version(db, body["expected_version_id"])
+            m.require(previous["kind"] == body["kind"], "Revision cannot change knowledge kind", "CONFLICT")
+            m.require(set(body["material_ids"]) - set(previous["material_ids"]),
+                      "Revision requires new supporting material", "CONFLICT")
         for identity in body["material_ids"]:
             self._material(db, identity)
         identity = "candidate:" + str(uuid.uuid4())
@@ -251,21 +305,32 @@ class Knowledge:
         reviewed = dict(body, review_id=review_id, version_id=version_id, recorded_at=int(time.time()))
         db.execute("INSERT INTO reviews VALUES (?,?,?,?)", (review_id, body["candidate_id"], fingerprint, m.canonical(reviewed).decode()))
         if version_id:
-            lineage = "knowledge:" + str(uuid.uuid4())
+            if "expected_version_id" in candidate:
+                lifecycle_required(db)
+                previous = self._active_version(db, candidate["expected_version_id"])
+                lineage = previous["lineage_id"]
+                db.execute("UPDATE versions SET state='SUPERSEDED' WHERE id=? AND state='ACTIVE'", (previous["version_id"],))
+            else:
+                lineage = "knowledge:" + str(uuid.uuid4())
             version = dict(version_id=version_id, lineage_id=lineage, candidate_id=body["candidate_id"], review_id=review_id,
                            kind=candidate["kind"], content=candidate["content"], conditions=candidate["conditions"], material_ids=materials,
                            recorded_at=reviewed["recorded_at"])
             db.execute("INSERT INTO versions VALUES (?,?,?,?,?,?,?)", (version_id, lineage, body["candidate_id"], candidate["kind"],
                         m.canonical(candidate["conditions"]).decode(), "ACTIVE", m.canonical(version).decode()))
+            if "expected_version_id" in candidate:
+                db.execute("INSERT INTO revision_links VALUES (?,?)", (candidate["expected_version_id"], version_id))
         db.execute("UPDATE candidates SET state=? WHERE id=?", ("ACCEPTED" if version_id else "REJECTED", body["candidate_id"]))
         return dict(review_id=review_id, version_id=version_id, reused=False)
 
     @read_only
     def get(self, kind, identity):
         m.identity(identity)
-        tables = dict(material="materials", candidate="candidates", review="reviews", version="versions")
+        tables = dict(material="materials", candidate="candidates", review="reviews", version="versions",
+                      usage="usages", feedback="feedback", retirement="retirements")
         m.require(type(kind) is str and kind in tables, "Unknown object kind")
         with self.database.connection() as db:
+            if kind in ("usage", "feedback", "retirement"):
+                lifecycle_required(db)
             document = self.database.document(db, tables[kind], identity)
             if kind in ("candidate", "version"):
                 document["state"] = db.execute(f"SELECT state FROM {tables[kind]} WHERE id=?", (identity,)).fetchone()[0]
@@ -275,6 +340,15 @@ class Knowledge:
                 ids = sorted(set(ids + candidate["material_ids"]))
                 document["version_state"] = (db.execute("SELECT state FROM versions WHERE id=?", (document["version_id"],)).fetchone()[0]
                                              if document["version_id"] else None)
+            if kind in ("usage", "feedback", "retirement"):
+                version = self.database.document(db, "versions", document["version_id"])
+                document["version_state"] = db.execute("SELECT state FROM versions WHERE id=?", (document["version_id"],)).fetchone()[0]
+                if kind == "usage":
+                    ids = version["material_ids"]
+                    document["latest_feedback_id"] = self._feedback_head(db, identity)
+                elif kind == "feedback":
+                    ids = [document["material_id"]]
+                    document["latest_feedback_id"] = self._feedback_head(db, document["usage_id"])
             materials = [self._material_snapshot(db, item) for item in ids]
         return m.output(dict(record=document, materials=self._availability(materials), observed_at=int(time.time())))
 
@@ -297,7 +371,7 @@ class Knowledge:
 
     def _observation(self, receipt):
         result = receipt["result"]
-        kind = next(kind for kind in ("material", "candidate", "review") if kind + "_id" in result)
+        kind = next(kind for kind in ("feedback", "usage", "retirement", "material", "candidate", "review") if kind + "_id" in result)
         try:
             return dict(self.get(kind, result[kind + "_id"]), record_status="AVAILABLE")
         except m.KnowledgeError as exc:
@@ -316,8 +390,9 @@ class Knowledge:
         return m.output(dict(receipt=receipt, observation=self._observation(receipt)))
 
     @read_only
-    def pending(self, scope, request_id):
-        key = m.operation_key(scope, "publish_material", request_id)
+    def pending(self, scope, request_id, *, operation="publish_material"):
+        m.require(type(operation) is str and operation in m.PUBLICATIONS, "Operation has no publication recovery")
+        key = m.operation_key(scope, operation, request_id)
         with self.database.connection() as db:
             saved = self._publication_state(db, key)
             if saved["state"] == "COMMITTED":
@@ -335,8 +410,9 @@ class Knowledge:
         return dict(state="COMMITTED", receipt=receipt)
 
     @writing
-    def resume(self, scope, request_id):
-        key = m.operation_key(scope, "publish_material", request_id)
+    def resume(self, scope, request_id, *, operation="publish_material"):
+        m.require(type(operation) is str and operation in m.PUBLICATIONS, "Operation has no publication recovery")
+        key = m.operation_key(scope, operation, request_id)
         with self.database.connection() as db:
             # Diagnostic report decoding/size does not authorize execution
             # and must not prevent recovery of a verified original intent.

@@ -33,6 +33,36 @@ CREATE TABLE failures (sequence INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT 
 """
 
 
+LIFECYCLE_SQL = """
+CREATE TABLE usages (id TEXT PRIMARY KEY, version_id TEXT NOT NULL REFERENCES versions(id),
+ fingerprint TEXT NOT NULL, document TEXT NOT NULL);
+CREATE TABLE feedback (id TEXT PRIMARY KEY, usage_id TEXT NOT NULL REFERENCES usages(id),
+ predecessor_id TEXT REFERENCES feedback(id), material_id TEXT NOT NULL UNIQUE REFERENCES materials(id),
+ fingerprint TEXT NOT NULL, document_sha256 TEXT NOT NULL, document TEXT NOT NULL);
+CREATE INDEX feedback_by_usage ON feedback(usage_id);
+CREATE UNIQUE INDEX first_feedback ON feedback(usage_id) WHERE predecessor_id IS NULL;
+CREATE UNIQUE INDEX one_correction ON feedback(predecessor_id) WHERE predecessor_id IS NOT NULL;
+CREATE TABLE retirements (id TEXT PRIMARY KEY, version_id TEXT NOT NULL UNIQUE REFERENCES versions(id),
+ fingerprint TEXT NOT NULL, document TEXT NOT NULL);
+CREATE TABLE revision_links (previous_id TEXT PRIMARY KEY REFERENCES versions(id),
+ next_id TEXT NOT NULL UNIQUE REFERENCES versions(id));
+CREATE TABLE feedback_reservations (slot TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE REFERENCES pending(key));
+"""
+
+
+def lifecycle_required(db):
+    m.require(db.execute("PRAGMA user_version").fetchone()[0] == 2,
+              "Lifecycle operations require explicit store.upgrade() to format 2", "UNSUPPORTED_VERSION")
+
+
+def install_lifecycle(db):
+    # executescript would commit an existing transaction before running DDL.
+    for statement in LIFECYCLE_SQL.split(";"):
+        if statement.strip():
+            db.execute(statement)
+    db.execute("PRAGMA user_version=2")
+
+
 def check_regular(info):
     m.require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.geteuid()
               and info.st_mode & 0o077 == 0, "Expected an owned private regular file", "STORE_INVALID")
@@ -126,7 +156,7 @@ def initialize(path, binding):
             db.executescript("BEGIN IMMEDIATE;" + SQL)
             db.execute("INSERT INTO metadata VALUES ('identity',?)", (identity_bytes.decode(),))
             db.execute(f"PRAGMA application_id={APP_ID}")
-            db.execute("PRAGMA user_version=1")
+            install_lifecycle(db)
         durable_file(root / "identity.json", identity_bytes)
         fd = os.open(root, os.O_DIRECTORY)
         try:
@@ -198,7 +228,7 @@ class Database:
             db.execute("PRAGMA foreign_keys=ON")
             db.execute("PRAGMA synchronous=FULL")
             m.require(db.execute("PRAGMA application_id").fetchone()[0] == APP_ID
-                      and db.execute("PRAGMA user_version").fetchone()[0] == 1,
+                      and db.execute("PRAGMA user_version").fetchone()[0] in (1, 2),
                       "Database format differs", "STORE_INVALID")
             m.require(read_database_identity(db) == self.identity,
                       "Database identity differs", "STORE_INVALID")

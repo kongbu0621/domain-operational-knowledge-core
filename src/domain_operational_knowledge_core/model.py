@@ -10,7 +10,10 @@ MAX_REQUEST = 262144
 MAX_RESPONSE = 1048576
 MAX_TEXT = 65536
 MAX_MATERIAL = 262144
-OPERATIONS = {"register_material", "publish_material", "propose", "review"}
+LEGACY_OPERATIONS = {"register_material", "publish_material", "propose", "review"}
+LIFECYCLE_OPERATIONS = {"start_use", "complete_use", "correct_feedback", "propose_revision", "retire"}
+OPERATIONS = LEGACY_OPERATIONS | LIFECYCLE_OPERATIONS
+PUBLICATIONS = {"publish_material", "complete_use", "correct_feedback"}
 
 
 class KnowledgeError(Exception):
@@ -170,14 +173,17 @@ def validate_body(operation, body):
             reference(body["reference"])
         else:
             text(body["text"], maximum=MAX_TEXT, empty=True)
-    elif operation == "propose":
-        fields(body, "proposal_id kind content conditions material_ids")
+    elif operation in ("propose", "propose_revision"):
+        fields(body, "proposal_id kind content conditions material_ids" +
+               (" expected_version_id" if operation == "propose_revision" else ""))
+        if operation == "propose_revision":
+            identity(body["expected_version_id"])
         identity(body["proposal_id"])
         text(body["kind"], maximum=64)
         text(body["content"], maximum=MAX_TEXT)
         context(body["conditions"])
         refs(body["material_ids"])
-    else:
+    elif operation == "review":
         fields(body, "candidate_id candidate_sha256 decision reviewer reason evidence_material_ids")
         identity(body["candidate_id"])
         sha(body["candidate_sha256"])
@@ -185,6 +191,31 @@ def validate_body(operation, body):
         text(body["reviewer"])
         text(body["reason"], maximum=4096)
         refs(body["evidence_material_ids"])
+
+    elif operation == "start_use":
+        fields(body, "usage_id consumer_ref task_ref version_id context")
+        identity(body["usage_id"])
+        identity(body["version_id"])
+        text(body["consumer_ref"])
+        text(body["task_ref"])
+        require(not any(ord(c) < 32 or ord(c) == 127 for c in body["task_ref"]), "Invalid task reference")
+        context(body["context"])
+    elif operation in ("complete_use", "correct_feedback"):
+        fields(body, "usage_id material" + (" expected_feedback_id" if operation == "correct_feedback" else ""))
+        identity(body["usage_id"])
+        if operation == "correct_feedback":
+            identity(body["expected_feedback_id"])
+        validate_body("publish_material", body["material"])
+    elif operation == "retire":
+        fields(body, "expected_version_id reviewer reason evidence_material_ids")
+        identity(body["expected_version_id"])
+        text(body["reviewer"])
+        text(body["reason"], maximum=4096)
+        refs(body["evidence_material_ids"])
+
+
+def material_body(request):
+    return request["body"]["material"] if request["operation"] in ("complete_use", "correct_feedback") else request["body"]
 
 
 def operation_key(scope, operation, request_id):

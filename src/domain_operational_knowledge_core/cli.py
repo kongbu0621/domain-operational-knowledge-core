@@ -33,10 +33,11 @@ def parser():
     init = commands.add_parser("init")
     init.add_argument("--ledger-db", required=True)
     init.add_argument("--anchor-artifact", required=True)
+    commands.add_parser("upgrade")
     write = commands.add_parser("write")
     write.add_argument("--request", required=True)
     get = commands.add_parser("get")
-    get.add_argument("--kind", required=True, choices=["material", "candidate", "review", "version"])
+    get.add_argument("--kind", required=True, choices=["material", "candidate", "review", "version", "usage", "feedback", "retirement"])
     get.add_argument("--id", required=True)
     query = commands.add_parser("query")
     query.add_argument("--kind", required=True)
@@ -51,6 +52,8 @@ def parser():
         child.add_argument("--request-id", required=True)
         if name == "operation":
             child.add_argument("--operation", required=True, choices=sorted(m.OPERATIONS))
+        else:
+            child.add_argument("--operation", default="publish_material", choices=sorted(m.PUBLICATIONS))
     return root
 
 
@@ -64,7 +67,9 @@ def _run(argv=None):
             result = dict(store_id=store.database.identity["store_id"], schema=m.SCHEMA)
         else:
             store = open_store(args.store)
-            if args.command == "write":
+            if args.command == "upgrade":
+                result = store.upgrade()
+            elif args.command == "write":
                 result = store.execute(read_input(args.request))
             elif args.command == "get":
                 result = store.get(args.kind, args.id)
@@ -75,16 +80,16 @@ def _run(argv=None):
             elif args.command == "operation":
                 result = store.get_operation(args.scope, args.operation, args.request_id)
             else:
-                result = getattr(store, args.command)(args.scope, args.request_id)
+                result = getattr(store, args.command)(args.scope, args.request_id, operation=args.operation)
         if args.command not in ("write", "resume"):
-            result = dict(status="OK", commit_state="committed" if command == "init" else "not_applicable", data=result)
+            result = dict(status="OK", commit_state="committed" if command in ("init", "upgrade") else "not_applicable", data=result)
         sys.stdout.buffer.write(m.canonical(m.output(result)) + b"\n")
         sys.stdout.buffer.flush()
         return 0
     except m.KnowledgeError as exc:
         if command in ("get", "query", "read-material", "operation", "pending"):
             exc = m.KnowledgeError(exc.code, exc.message, "not_applicable", details=exc.details)
-        elif command in ("init", "write", "resume") and exc.commit_state == "not_applicable":
+        elif command in ("init", "upgrade", "write", "resume") and exc.commit_state == "not_applicable":
             exc = m.KnowledgeError(exc.code, exc.message, "not_committed", details=exc.details)
         try:
             result = m.output(exc.as_dict())

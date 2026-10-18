@@ -167,7 +167,7 @@ class JournalRecoveryTests(unittest.TestCase):
 
     def test_wrong_format_does_not_trigger_a_write_fallback(self):
         with sqlite3.connect(self.path) as db:
-            db.execute("PRAGMA user_version=2")
+            db.execute("PRAGMA user_version=999")
         before = self.path.read_bytes()
         connect, modes = Database._connect_checked, []
 
@@ -235,7 +235,7 @@ class JournalRecoveryTests(unittest.TestCase):
         finally:
             self.path.parent.chmod(0o700)
         with sqlite3.connect(self.path) as db:
-            db.execute("PRAGMA user_version=2")
+            db.execute("PRAGMA user_version=999")
         before = self.path.read_bytes()
         error = self.failure("STORE_INVALID", lambda: open_store(self.path.parent))
         self.assertEqual(error.commit_state, "not_applicable")

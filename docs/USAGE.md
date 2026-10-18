@@ -1,6 +1,6 @@
 # 安装与使用
 
-当前 `0.1.0a1` 为源码交付的 alpha；未发布 PyPI 包。验证环境为 Linux / Python 3.12。当前功能和限额见[公共接口](INTERFACE.md)。
+当前 `0.1.0a2` 为源码交付的 alpha；未发布 PyPI 包。验证环境为 Linux / Python 3.12。当前功能和限额见[公共接口](INTERFACE.md)。
 
 ## 安装
 
@@ -11,7 +11,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pip install setuptools==84.0.0 wheel==0.48.0
 .venv/bin/python -m pip wheel --no-build-isolation --no-deps /absolute/path/to/infra-artifact-ledger -w dist
 .venv/bin/python -m pip wheel --no-build-isolation --no-deps . -w dist
-.venv/bin/python -m pip install --no-index --find-links dist domain-operational-knowledge-core==0.1.0a1
+.venv/bin/python -m pip install --no-index --find-links dist domain-operational-knowledge-core==0.1.0a2
 ```
 
 运行时只依赖 Ledger 和 Python 标准库；无需 P、Local Hand、模型账户或网络服务。构建工具与 wheel 可以预先准备，安装后的本地调用可离线进行。
@@ -31,7 +31,23 @@ python3.12 -m venv .venv
 3. 由示例中明确的审查输入接受候选。
 4. 重新打开知识库，查询匹配知识，按原材料版本取回字节并比较。
 
-输出包含知识版本和材料引用。这验证库的独立调用，不表示真实生产效果、使用反馈或 Ledger A3 已完成。重复运行应选新目录；接续已有材料请求应使用 resume，不能覆盖示例目录。
+输出包含知识版本和材料引用。这验证库的独立调用，不表示真实生产效果或 Ledger A3 已完成。重复运行应选新目录；接续已有材料请求应使用 resume，不能覆盖示例目录。
+
+## 完整生命周期示例
+
+```sh
+.venv/bin/python examples/knowledge_lifecycle.py /absolute/private/new-lifecycle-example
+```
+
+示例在独立合成目录完成：材料 → 候选与接受 → 精确版本使用登记 → 效果材料 → 审查修订 → 退休。重开后核对旧版本与原使用仍关联、最新版本不再进入主动查询。示例保留各请求 JSON，便于用 CLI 查询原回执；数据和效果均明确为合成，不代表 P 或真实 Agent 已采用。
+
+若使用 0.1.0a1 创建的原知识库，先停用旧版调用者、保留一致性备份，再显式升级所选知识目录：
+
+```sh
+operational-knowledge --store /absolute/private/knowledge upgrade
+```
+
+普通打开不会升级。升级保留原记录、回执、事件、待决请求和 Ledger 绑定；不要用复制活动主库或重新初始化代替升级。新建目录已是格式 2，无需该步骤。
 
 ## 使用现有 Ledger
 
@@ -61,7 +77,7 @@ operational-knowledge --store /absolute/private/knowledge get --kind version --i
 operational-knowledge --store /absolute/private/knowledge read-material --id material:build-001
 ```
 
-query 返回知识文本、准确版本和材料来源。read-material 返回经校验的 Base64 字节；Manifest 的 entry_key 只是逻辑键，不应直接拼接为输出路径。查询不是实际使用登记；本版本尚无 use、feedback、revise 或 retire 接口。
+query 返回知识文本、准确版本和材料来源。read-material 返回经校验的 Base64 字节；Manifest 的 entry_key 只是逻辑键，不应直接拼接为输出路径。查询不是实际使用登记；开始采用前调用 start_use，完成后调用 complete_use，字段见[使用与反馈接口](INTERFACE.md#使用反馈和版本变更)。
 
 ## 中断后接续
 
@@ -79,7 +95,9 @@ operational-knowledge --store /absolute/private/knowledge pending --scope exampl
 operational-knowledge --store /absolute/private/knowledge resume --scope example:operator --request-id request:material-001
 ```
 
-resume 使用原持久输入核对和接续，不需重新提供文本。propose/review/register_material 均为单次 K 事务，丢响应后用原请求查询或原样重试。不要换请求 ID、改内容或重跑生产任务来猜测旧写入结果。身份冲突保留原件，核对所选库和原请求。
+resume 使用原持久输入核对和接续，不需重新提供文本。propose/propose_revision/review/register_material/start_use/retire 均为单次 K 事务，丢响应后用原请求查询或原样重试。不要换请求 ID、改内容或重跑生产任务来猜测旧写入结果。身份冲突保留原件，核对所选库和原请求。
+
+反馈 complete_use/correct_feedback 也走原请求接续；pending/resume 加 `--operation complete_use` 或 `--operation correct_feedback`，不能使用默认的 publish_material 去查询另一操作。
 
 如果 pending 只是读取失败诊断或生成报告失败，仍可使用原 scope/request_id 调用 resume；它会独立校验原意图及 Ledger 请求身份，不依赖诊断报告。原请求或成功回执绑定错误不会因此被绕过，已有失败记录保持原样。
 
@@ -87,7 +105,7 @@ resume 使用原持久输入核对和接续，不需重新提供文本。propose
 
 当前记录无法完整观察时，operation 仍可返回已经核对的原 receipt；observation.record_status 为 UNAVAILABLE 或 UNKNOWN，record/materials 为 null，error 说明此次观察失败。不要把“历史提交已确认”当作“当前内容可以使用”。
 
-STORE_INVALID 表示已定位的本地记录、索引或引用无法一致核对；保留原目录和请求调查原因，不能换请求 ID 绕过或自动重写记录。正常的上一版知识库可直接读取与接续，无需迁移；这不意味着未知来源的副本已具备恢复启用资格。
+STORE_INVALID 表示已定位的本地记录、索引或引用无法一致核对；保留原目录和请求调查原因，不能换请求 ID 绕过或自动重写记录。正常的上一版知识库可直接读取与接续原材料请求；新增生命周期操作前显式 upgrade，这不意味着未知来源的副本已具备恢复启用资格。
 
 SQLite 进程中断后若留下热回滚日志，打开原知识库会在 SQLite 明确要求时尝试一次原库回滚，再检查身份并读取。不要手工删除 `knowledge.sqlite-journal`，也不要复制仍在变化的单个数据库文件来绕过错误。忙错误先确认原写入者；恢复写权限或存储问题后沿原路径重开，再查询原 operation/pending。恢复未提交页面不会重做 Ledger 发布或生产任务，详见[公共接口](INTERFACE.md)。
 
@@ -102,4 +120,4 @@ PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 
 验证 wheel 时，在独立环境安装上述两个 wheel，从仓外用 `python -I -m unittest discover -s /absolute/path/to/this-repo/tests -v` 运行同一组测试，并运行合成示例；这样可核对安装包的实际调用路径。测试只使用临时数据，强制退出钩子只存在于测试脚本。
 
-本版本不提供知识使用/反馈/修订/退休、P 自动接入、多租户鉴权或快照恢复启用。旧知识目录副本不能仅因引用齐全就直接作为当前库使用；完整生命周期及组合恢复按[实施计划](IMPLEMENTATION_PLAN.md)后续推进。
+本版本不提供 P 自动接入、多租户鉴权或快照恢复启用。旧知识目录副本不能仅因引用齐全就直接作为当前库使用；真实消费及组合恢复按[实施计划](IMPLEMENTATION_PLAN.md)后续推进。

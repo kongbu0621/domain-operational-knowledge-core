@@ -1,6 +1,6 @@
-# 公共接口：材料、候选与明确审查
+# 公共接口：运行知识生命周期
 
-`0.1.0a1` alpha，Linux / Python 3.12，单个受信本地数据域。当前仅实现首轮材料、候选、审查及查询；使用登记、效果、修订、退休、组合快照恢复和 P 适配尚未实现。
+`0.1.0a2` alpha，Linux / Python 3.12，单个受信本地数据域。已实现材料、候选、审查、查询、使用登记、反馈及更正、修订和退休；组合快照恢复和 P 适配尚未实现。
 
 ## 库与 CLI
 
@@ -10,15 +10,16 @@
 | --- | --- | --- |
 | `initialize(path, *, ledger_path, anchor_artifact_id)` | `init --ledger-db PATH --anchor-artifact ID` | 创建不存在的私有知识目录，绑定一个已有 Ledger；目标已存在则拒绝 |
 | `open_store(path)` | 其他命令自动打开既有目录 | 检查知识库身份与格式，文件缺失不自动重建 |
-| `store.execute(request_utf8)` | `write --request FILE` | 接收严格 UTF-8 JSON bytes；四种写操作见下表 |
-| `store.get(kind, id)` | `get --kind KIND --id ID` | 历史对象与当前材料观察；kind 为 material、candidate、review、version |
+| `store.execute(request_utf8)` | `write --request FILE` | 接收严格 UTF-8 JSON bytes；九种写操作见下表 |
+| `store.get(kind, id)` | `get --kind KIND --id ID` | 历史对象与当前材料观察；kind 为 material、candidate、review、version、usage、feedback、retirement |
 | `store.query(kind, context, *, after="", limit=10)` | `query --kind KIND --context FILE [--after ID] [--limit N]` | 当前有效且条件匹配的知识；实际核对所需材料字节 |
 | `store.read_material(id)` | `read-material --id ID` | 校验准确材料版本并返回完整有界字节，JSON 中用 Base64 表示 |
 | `store.get_operation(scope, operation, request_id)` | `operation --scope S --operation OP --request-id ID` | 原成功回执及本次状态/材料观察 |
-| `store.pending(scope, request_id)` | `pending --scope S --request-id ID` | 原 publish_material 待决输入与最近十条失败，或其已提交回执 |
-| `store.resume(scope, request_id)` | `resume --scope S --request-id ID` | 使用原持久输入接续 publish_material；成功过则返回原回执 |
+| `store.pending(scope, request_id, *, operation="publish_material")` | `pending --scope S --request-id ID [--operation OP]` | 原材料/反馈发布待决输入与最近十条失败，或其已提交回执 |
+| `store.resume(scope, request_id, *, operation="publish_material")` | `resume --scope S --request-id ID [--operation OP]` | 接续原发布请求；成功过则返回原回执 |
+| `store.upgrade()` | `upgrade` | 原库格式 1 显式升级为 2，已是 2 时不新增状态 |
 
-只读 CLI 成功为 `{"status":"OK","commit_state":"not_applicable","data":…}`。init 成功使用同一形状，但 commit_state=committed，data 含新 store_id；write/resume 直接返回提交 envelope。命令只输出一行 JSON；`--help` 提供普通帮助文本。CLI 路径输入必须是有界普通文件，不接受 FIFO 或符号链接作为请求文件。
+只读 CLI 成功为 `{"status":"OK","commit_state":"not_applicable","data":…}`。init/upgrade 成功使用同一形状，但 commit_state=committed，data 含 store_id；write/resume 直接返回提交 envelope。命令只输出一行 JSON；`--help` 提供普通帮助文本。CLI 路径输入必须是有界普通文件，不接受 FIFO 或符号链接作为请求文件。
 
 初始化在创建目标前失败为 not_committed；创建过程中结果未能完整确认时为 unknown，保留目录供核对；完成持久化后的重开检查失败仍为 committed，并在错误 details 中保留 store_id。失败后核对原目标，不能覆盖已存在的目录。只读命令的输出包装超限仍为 not_applicable。
 
@@ -83,6 +84,51 @@ material_id 在一个知识库内全局唯一；候选的逻辑去重键为 `(sc
 - gaps 最多 16 个非空字符串，每项最多 512 bytes。material_ids、evidence_material_ids 各为 1–8 个不同材料 ID；候选与审查依据合计最多八个材料。
 - candidate_sha256 必须等于 propose 返回值，绑定候选的全部输入。decision 仅为 ACCEPT 或 REJECT。
 
+## 使用、反馈和版本变更
+
+所有操作仍经 write/execute 使用上面的同一 envelope；下表字段恰好匹配请求 body。
+
+| operation | body 必需字段 | 结果与前提 |
+| --- | --- | --- |
+| `start_use` | usage_id、consumer_ref、task_ref、version_id、context | 返回 usage_id；同事务检查准确版本仍 ACTIVE、适用条件匹配、所需材料可读 |
+| `complete_use` | usage_id、material | 返回 feedback_id/material_id；保存一次初始反馈及其运行材料 |
+| `correct_feedback` | usage_id、expected_feedback_id、material | 返回新的 feedback_id/material_id；expected_feedback_id 必须是该使用的当前反馈 |
+| `propose_revision` | propose 的全部字段，加 expected_version_id | 返回候选 ID/摘要；目标必须当前有效，kind 不变，材料须包含目标版本未引用过的材料 ID |
+| `retire` | expected_version_id、reviewer、reason、evidence_material_ids | 返回 retirement_id；核对该准确版本仍有效及退休依据可读 |
+
+usage_id 是调用方指定的全库唯一稳定 ID。consumer_ref、task_ref、context 沿用材料相应字段的类型与限额。相同 usage_id 和完全相同的作用域/内容换请求 ID 只复用原使用；变更任务、版本或上下文冲突。查询命中不产生 usage，使用登记也不证明外部业务实际执行或授予行动权限。
+
+material 是完整的 publish_material body，包含一个新的 material_id、source_ref、task_ref、context、claimed_outcome、gaps、text；正文上限仍为 64 KiB，整个外层请求仍限 256 KiB。source_ref 必须等于原使用的 consumer_ref，task_ref/context 必须与原使用一致。反馈结果是调用方提供的观察，K 不自行推断外部事实。当前反馈入口发布有界文本；其他已有制品仍可通过 register_material 单独引用。
+
+complete_use/correct_feedback 先在 K 保存完整原请求并预留该初始反馈或更正位置，随后经 Ledger 保存精确原件，最后在一个 K 事务内保存运行材料、反馈关联及回执。材料通过 material_id 可被新候选引用，反馈同时保留 usage_id、version_id、predecessor_id。三次提交不是跨库原子事务。相同请求幂等重放；同一反馈位置换请求 ID 且作用域/操作/全部内容相同，返回已有结果；不同内容冲突。另一原请求尚待决时返回 PENDING，先接续它，不能换身份重复发布。
+
+首次反馈唯一；更正追加新材料与新反馈，保留原反馈。两个并发更正至多一个占据该前提，另一个收到 PENDING 或 CONFLICT。更正不新增使用次数，不自动修改知识状态；历史材料仍可读取与审查。新候选的审查者需核对该使用的最新反馈，不能把旧反馈自动当成最终结论。
+
+没有原使用记录的结果不能用 complete_use 伪造先前采用；该操作返回 NOT_FOUND 且不写 Ledger。将结果通过 publish_material 保存，并在 gaps 明确填写例如 `MISSING_USAGE_RECORD: usage:missing; adoption was not registered`。它是带关联缺口的运行材料，可供审查，不计作已登记使用的完成反馈。
+
+propose_revision 只产生待审候选。其 candidate_sha256 同时绑定 expected_version_id；ACCEPT 时再次检查目标仍有效，同一事务内将旧版本置为 SUPERSEDED、在原 lineage_id 下建立唯一 ACTIVE 新版本，并保存审查、版本关系和回执。两个竞争修订只有一个生效；过期候选保留待审并报告 CONFLICT，仍可显式 REJECT。本版不跨 kind/谱系合并，不自动重新激活退休版本。
+
+retire 核对准确当前版本，不能把旧版本的退休请求应用到新版本。相同退休决定可复用，改变主体、理由或依据冲突。已登记使用不锁住知识；退休或替代后仍可提交其原版本的迟到反馈和更正。旧使用登记重放返回原 receipt，observation.record.version_state 显示本次观察的 ACTIVE/SUPERSEDED/RETIRED，不能把历史成功当作新使用许可。
+
+get usage 返回原使用及 version_state、latest_feedback_id；get feedback 返回原反馈及其准确版本、predecessor_id 和最新反馈 ID。反馈本身的原件通过 material_id/read-material 读取；使用记录观察其原知识材料，退休记录观察退休依据。历史 receipt 始终与当前观察分开。
+
+反馈中断接续必须带原 operation：
+
+```sh
+operational-knowledge --store /absolute/private/knowledge pending --scope example:operator --operation complete_use --request-id request:feedback
+operational-knowledge --store /absolute/private/knowledge resume --scope example:operator --operation complete_use --request-id request:feedback
+```
+
+correct_feedback 同理。未提供 operation 时保持旧默认 publish_material。start_use、propose_revision、review、retire 是单次 K 事务，输出丢失后核对原 operation 或原样重试；不重新执行外部业务。
+
+## 存储格式升级
+
+新初始化库使用 SQLite user_version=2；请求 envelope/身份标记仍使用 operational-knowledge-v1，升级不改变 store_id 或 Ledger 绑定。正常打开格式 1 不迁移，原材料/候选/审查/查询及材料接续继续可用；新增生命周期操作返回 UNSUPPORTED_VERSION，须显式运行 `store.upgrade()` 或 CLI `upgrade`。
+
+升级前停用旧版调用者，并为所选原库保留一致性备份；升级只针对显式指定的知识目录，在一个 SQLite 事务内增加生命周期表/索引并更新格式号。原记录、事件、回执、待决输入与身份文件保持原样，Ledger 不写入。已升级时返回 format_version=2、upgraded=false；首次成功为 upgraded=true。事务失败回滚，提交未知时重开并沿原 upgrade 核对，不另建库；本版不提供降级或组合恢复启用。
+
+旧版 0.1.0a1 不支持格式 2，不应继续使用旧版写入者。格式升级不等于旧快照已经可以成为当前知识实例；组合恢复与消费者切换仍是后续工作。
+
 ## 准确材料引用与 Ledger 绑定
 
 初始化时指定已有 Ledger 的数据库路径和一个已知 Artifact ID 作为逻辑锚点。K 保存其完整不可变 Artifact metadata，并在材料操作时通过公共接口重新核对；路径相同不代表绑定相同。锚点可以是调用方已确认的现有 Artifact，也可以由调用方通过 Ledger 公共入口建立；[合成示例](../examples/material_to_knowledge.py)展示后者。
@@ -117,11 +163,11 @@ resume 核对原 Ledger 操作的幂等身份、指纹及结果；尚未找到�
 
 材料还需对应唯一的初次创建回执及其事件原件；后续 reused 回执不能替代初次创建绑定。register_material 直接核对结构化材料、准确引用与原请求指纹；publish_material 读取原文字节后重建原请求，核对来源、任务、上下文、结果声明、缺口和正文，并核对原请求确定的 Artifact/Version/Blob 身份。即使另一版本正文完全相同，也不能替换原版本。发现材料绑定不一致时拒绝读取、查询或新准入，原成功回执仍单独保留。
 
-发布原件不可读时，仍可返回结构化记录与明确的材料 UNAVAILABLE/UNKNOWN，但不能据此声明全部材料绑定已重新验证。相同逻辑材料换请求 ID 时，利用这次提供的原正文核对已有记录及初次请求，不产生新原件；该复用回执仍不证明原件当前可读。本轮检查兼容既有数据格式，不补写摘要或迁移数据库。
+发布原件不可读时，仍可返回结构化记录与明确的材料 UNAVAILABLE/UNKNOWN，但不能据此声明全部材料绑定已重新验证。相同逻辑材料换请求 ID 时，利用这次提供的原正文核对已有记录及初次请求，不产生新原件；该复用回执仍不证明原件当前可读。材料读取检查兼容旧记录，不补写原材料摘要。存储格式升级另由显式 upgrade 完成。
 
 pending 提供原请求及最近失败诊断；诊断 JSON 损坏或报告超限可能使这次报告读取失败。resume 独立读取并核对原持久意图或成功回执，不依赖诊断报告的解码和输出大小。诊断错误不删除原件，也不阻止已验证原请求按原 Ledger 身份接续；请求或回执自身的矛盾仍拒绝。
 
-写成功返回 status=COMMITTED、commit_state=committed、replayed、receipt、observation。receipt 是不可变的原提交记录，含 store_id、scope、operation、request_id、fingerprint、recorded_at、result。result 包含 material_id，或 candidate_id/candidate_sha256，或 review_id/version_id，以及 reused。REJECT 的 version_id 为 null。
+写成功返回 status=COMMITTED、commit_state=committed、replayed、receipt、observation。receipt 是不可变的原提交记录，含 store_id、scope、operation、request_id、fingerprint、recorded_at、result。result 按操作包含 material_id、candidate_id/candidate_sha256、review_id/version_id、usage_id、feedback_id/material_id 或 retirement_id，以及 reused。REJECT 的 version_id 为 null。
 
 replayed 表示同请求重放；reused 表示首次处理该请求时复用既有逻辑对象。更换请求 ID 不会重复创建同一材料、提案或等价审查。同材料尚在另一原请求中发布时返回 PENDING，调用方接续原请求。已决候选再次审查只允许完全相同的决定、主体、理由与依据；矛盾决定冲突。
 
