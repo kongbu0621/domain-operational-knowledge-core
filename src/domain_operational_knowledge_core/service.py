@@ -35,6 +35,7 @@ def writing(method):
     return checked
 
 
+@writing
 def initialize(path, *, ledger_path, anchor_artifact_id):
     """Create only a new local store, bound to an existing public Ledger artifact."""
     binding = capture_binding(ledger_path, anchor_artifact_id)
@@ -243,7 +244,14 @@ class Knowledge:
     def _observation(self, receipt):
         result = receipt["result"]
         kind = next(kind for kind in ("material", "candidate", "review") if kind + "_id" in result)
-        return self.get(kind, result[kind + "_id"])
+        try:
+            return dict(self.get(kind, result[kind + "_id"]), record_status="AVAILABLE")
+        except m.KnowledgeError as exc:
+            # The receipt was verified separately. Do not report its absence
+            # when only today's object/material observation cannot be read.
+            return dict(record=None, materials=None, observed_at=int(time.time()),
+                        record_status="UNAVAILABLE" if exc.code in ("NOT_FOUND", "STORE_INVALID", "UNSUPPORTED_VERSION") else "UNKNOWN",
+                        error=dict(code=exc.code, message=exc.message, details=exc.details))
 
     @read_only
     def get_operation(self, scope, operation, request_id):
@@ -257,18 +265,28 @@ class Knowledge:
     def pending(self, scope, request_id):
         key = m.operation_key(scope, "publish_material", request_id)
         with self.database.connection() as db:
-            request = self.database.pending(db, key)
-            if request is None:
-                old = self.database.receipt(db, key)
-                m.require(old is not None, "Request not found", "NOT_FOUND")
-                return dict(state="COMMITTED", receipt=old)
+            saved = self._publication_state(db, key)
+            if saved["state"] == "COMMITTED":
+                return saved
             failures = [json.loads(item[0]) for item in db.execute(
                 "SELECT document FROM failures WHERE key=? ORDER BY sequence DESC LIMIT 10", (key,))]
-            return m.output(dict(state="PENDING", request=request, recent_failures=failures))
+            return m.output(dict(saved, recent_failures=failures))
+
+    def _publication_state(self, db, key):
+        request = self.database.pending(db, key)
+        if request is not None:
+            return dict(state="PENDING", request=request)
+        receipt = self.database.receipt(db, key)
+        m.require(receipt is not None, "Request not found", "NOT_FOUND")
+        return dict(state="COMMITTED", receipt=receipt)
 
     @writing
     def resume(self, scope, request_id):
-        saved = self.pending(scope, request_id)
+        key = m.operation_key(scope, "publish_material", request_id)
+        with self.database.connection() as db:
+            # Diagnostic report decoding/size does not authorize execution
+            # and must not prevent recovery of a verified original intent.
+            saved = self._publication_state(db, key)
         if saved["state"] == "COMMITTED":
             return self._committed_result(saved["receipt"], True)
         return self.execute(m.canonical(saved["request"]))

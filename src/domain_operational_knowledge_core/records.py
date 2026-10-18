@@ -127,6 +127,10 @@ def receipt(db, key, store_id):
     m.require(value["store_id"] == store_id and value["fingerprint"] == row[0]
               and m.operation_key(value["scope"], value["operation"], value["request_id"]) == key,
               "Receipt differs from its original request")
+    # The append-only event retains the exact receipt committed in the same
+    # transaction. Request fingerprints alone do not bind the result IDs.
+    m.require(db.execute("SELECT 1 FROM events WHERE receipt=? LIMIT 1", (row[1],)).fetchone() is not None,
+              "Receipt differs from its committed event")
     result = value["result"]
     operation = value["operation"]
     if operation in ("publish_material", "register_material"):

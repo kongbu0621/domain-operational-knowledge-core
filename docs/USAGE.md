@@ -81,7 +81,11 @@ operational-knowledge --store /absolute/private/knowledge resume --scope example
 
 resume 使用原持久输入核对和接续，不需重新提供文本。propose/review/register_material 均为单次 K 事务，丢响应后用原请求查询或原样重试。不要换请求 ID、改内容或重跑生产任务来猜测旧写入结果。身份冲突保留原件，核对所选库和原请求。
 
+如果 pending 只是读取失败诊断或生成报告失败，仍可使用原 scope/request_id 调用 resume；它会独立校验原意图及 Ledger 请求身份，不依赖诊断报告。原请求或成功回执绑定错误不会因此被绕过，已有失败记录保持原样。
+
 成功回执与材料当前可用性分开查看：历史已提交但 observation 显示 UNAVAILABLE/UNKNOWN 时，不据此认定旧操作失败或知识现在可以采用。缺库、损坏、权限或空间错误均不触发自动初始化。
+
+当前记录无法完整观察时，operation 仍可返回已经核对的原 receipt；observation.record_status 为 UNAVAILABLE 或 UNKNOWN，record/materials 为 null，error 说明此次观察失败。不要把“历史提交已确认”当作“当前内容可以使用”。
 
 STORE_INVALID 表示已定位的本地记录、索引或引用无法一致核对；保留原目录和请求调查原因，不能换请求 ID 绕过或自动重写记录。正常的上一版知识库可直接读取与接续，无需迁移；这不意味着未知来源的副本已具备恢复启用资格。
 

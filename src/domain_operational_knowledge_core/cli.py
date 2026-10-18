@@ -55,8 +55,10 @@ def parser():
 
 
 def main(argv=None):
+    command = None
     try:
         args = parser().parse_args(argv)
+        command = args.command
         if args.command == "init":
             store = initialize(args.store, ledger_path=args.ledger_db, anchor_artifact_id=args.anchor_artifact)
             result = dict(store_id=store.database.identity["store_id"], schema=m.SCHEMA)
@@ -75,11 +77,15 @@ def main(argv=None):
             else:
                 result = getattr(store, args.command)(args.scope, args.request_id)
         if args.command not in ("write", "resume"):
-            result = dict(status="OK", commit_state="not_applicable", data=result)
+            result = dict(status="OK", commit_state="committed" if command == "init" else "not_applicable", data=result)
         sys.stdout.buffer.write(m.canonical(m.output(result)) + b"\n")
         sys.stdout.buffer.flush()
         return 0
     except m.KnowledgeError as exc:
+        if command in ("get", "query", "read-material", "operation", "pending"):
+            exc = m.KnowledgeError(exc.code, exc.message, "not_applicable", details=exc.details)
+        elif command in ("init", "write", "resume") and exc.commit_state == "not_applicable":
+            exc = m.KnowledgeError(exc.code, exc.message, "not_committed", details=exc.details)
         sys.stdout.buffer.write(m.canonical(exc.as_dict()) + b"\n")
         return {"NOT_FOUND": 3, "CONFLICT": 4, "IDENTITY_CONFLICT": 4, "BUSY": 6}.get(exc.code, 2)
     except (OSError, ValueError):

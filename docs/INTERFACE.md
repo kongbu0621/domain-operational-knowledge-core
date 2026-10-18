@@ -18,7 +18,9 @@
 | `store.pending(scope, request_id)` | `pending --scope S --request-id ID` | 原 publish_material 待决输入与最近十条失败，或其已提交回执 |
 | `store.resume(scope, request_id)` | `resume --scope S --request-id ID` | 使用原持久输入接续 publish_material；成功过则返回原回执 |
 
-普通 CLI 成功为 `{"status":"OK","commit_state":"not_applicable","data":…}`。write/resume 直接返回提交 envelope。命令只输出一行 JSON；`--help` 提供普通帮助文本。CLI 路径输入必须是有界普通文件，不接受 FIFO 或符号链接作为请求文件。
+只读 CLI 成功为 `{"status":"OK","commit_state":"not_applicable","data":…}`。init 成功使用同一形状，但 commit_state=committed，data 含新 store_id；write/resume 直接返回提交 envelope。命令只输出一行 JSON；`--help` 提供普通帮助文本。CLI 路径输入必须是有界普通文件，不接受 FIFO 或符号链接作为请求文件。
+
+初始化在创建目标前失败为 not_committed；创建过程中结果未能完整确认时为 unknown，保留目录供核对；完成持久化后的重开检查失败仍为 committed，并在错误 details 中保留 store_id。失败后核对原目标，不能覆盖已存在的目录。只读命令的输出包装超限仍为 not_applicable。
 
 ## 请求形状
 
@@ -93,13 +95,17 @@ publish_material 先在 K 提交原请求及待决状态，随后依固定身份
 
 resume 核对原 Ledger 操作的幂等身份、指纹及结果；尚未找到时只重试同一确定请求，由 Ledger 的同键事务幂等保证收敛。它不换对象 ID 或 key，也不把一次 NOT_FOUND 当作另起一次写入的依据。失败不会永久封禁该请求；身份冲突应先核对，不能重命名绕过。
 
-读取或接续 K 持久记录时也核对绑定：待决输入必须匹配原请求键、指纹和材料预留；回执必须匹配查询键、库身份和指纹索引。审查重新计算候选内容摘要，知识版本读取核对已接受候选、审查依据及选中记录的索引。字段、摘要或关联不一致返回 STORE_INVALID，保留原记录，不执行不同的请求或用重算新摘要掩盖内容改变。这是当前操作所涉及记录的一致性检查，不是整库审计、密码学防篡改或快照回滚检测。
+读取或接续 K 持久记录时也核对绑定：待决输入必须匹配原请求键、指纹和材料预留；回执必须匹配查询键、库身份、指纹索引及同事务保留的完整事件回执，结果 ID、reused 和时间也不能单独替换。审查重新计算候选内容摘要，知识版本读取核对已接受候选、审查依据及选中记录的索引。字段、摘要或关联不一致返回 STORE_INVALID，保留原记录，不执行不同的请求或用重算新摘要掩盖内容改变。这是当前操作所涉及记录的一致性检查，不是整库审计、密码学防篡改或快照回滚检测。
+
+pending 提供原请求及最近失败诊断；诊断 JSON 损坏或报告超限可能使这次报告读取失败。resume 独立读取并核对原持久意图或成功回执，不依赖诊断报告的解码和输出大小。诊断错误不删除原件，也不阻止已验证原请求按原 Ledger 身份接续；请求或回执自身的矛盾仍拒绝。
 
 写成功返回 status=COMMITTED、commit_state=committed、replayed、receipt、observation。receipt 是不可变的原提交记录，含 store_id、scope、operation、request_id、fingerprint、recorded_at、result。result 包含 material_id，或 candidate_id/candidate_sha256，或 review_id/version_id，以及 reused。REJECT 的 version_id 为 null。
 
 replayed 表示同请求重放；reused 表示首次处理该请求时复用既有逻辑对象。更换请求 ID 不会重复创建同一材料、提案或等价审查。同材料尚在另一原请求中发布时返回 PENDING，调用方接续原请求。已决候选再次审查只允许完全相同的决定、主体、理由与依据；矛盾决定冲突。
 
-observation 与历史 receipt 分开，包含本次读取时间、对象当前状态和逐材料 VERIFIED / UNAVAILABLE / UNKNOWN。材料缺失、损坏或绑定矛盾不抹掉原提交；临时读取故障不冒充材料已损坏。审查 ACCEPT 要重新核对材料可读，REJECT 可以保存对现存但不可读材料的拒绝判断。
+observation 与历史 receipt 分开，包含本次读取时间、对象当前状态和逐材料 VERIFIED / UNAVAILABLE / UNKNOWN。record_status=AVAILABLE 仅表示该次对象记录观察可返回，不证明每份材料现在可用，更不构成行动授权。当前对象/关联记录缺失或不一致时 record_status=UNAVAILABLE，临时读取故障等不能确定状态时为 UNKNOWN；此时 record 和 materials 均为 null，并附 error.code、message、details。
+
+已核对成功的 receipt 继续返回；观察失败不冒充原操作 NOT_FOUND，也不使原提交重新执行。回执本身与原事件不一致时仍报错，不能用“当前未知”掩盖。直接 get/read-material/query 遇到相关错误仍拒绝；新审查 ACCEPT 必须重新核对材料可读，REJECT 可以保存对现存但不可读材料的拒绝判断。
 
 query 按 kind 相等且 conditions 的每个键值均在 context 中精确匹配筛选 ACTIVE 版本；结果按 version_id 排序，limit 为 1–20，after 为上一页游标，末页 next_after=null。每页是一次独立观察；发生并发更新时不宣称跨页快照。返回知识文本、精确版本、内容摘要、审查/候选引用及已核对材料。匹配结果的必需材料不可用时明确失败，不静默漏掉该知识。查询不登记实际采用，usage_recorded=false。
 
@@ -114,7 +120,7 @@ KnowledgeError 提供 code、message、commit_state、details；CLI 错误为同
 | `not_committed` | 本次 K 领域操作未提交；不否认同键的旧提交 |
 | `pending` | 原发布意图已保存，材料尚未确认完整提交到 K；Ledger 可能部分或全部写入 |
 | `unknown` | 本地提交结果待核对；先查询原 operation/pending |
-| `committed` | 原 K 提交已确认，后续输出或观察仍可能失败 |
+| `committed` | 原 K 提交或初始化已确认，后续输出或观察仍可能失败 |
 | `not_applicable` | 只读观察，不表示有写入被撤销 |
 
 CLI 成功退出 0，NOT_FOUND 为 3，CONFLICT/IDENTITY_CONFLICT 为 4，BUSY 为 6，其他领域错误为 2，文件/输出 I/O 失败为 1。进程被杀或输出管道失效可能没有 JSON；不能单凭退出码认定未提交，按原请求核对。

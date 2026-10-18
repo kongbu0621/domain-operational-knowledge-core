@@ -82,7 +82,11 @@ def initialize(path, binding):
             os.close(parent_fd)
     except (sqlite3.Error, OSError) as exc:
         raise m.KnowledgeError("IO_ERROR", "Initialization incomplete; retain directory for inspection", "unknown") from exc
-    return Database(root)
+    try:
+        return Database(root)
+    except m.KnowledgeError as exc:
+        raise m.KnowledgeError(exc.code, "Store initialized; reopening verification failed", "committed",
+                               details=dict(store_id=identity["store_id"])) from exc
 
 
 class Database:
