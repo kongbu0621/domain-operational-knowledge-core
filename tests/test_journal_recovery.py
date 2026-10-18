@@ -240,3 +240,27 @@ class JournalRecoveryTests(unittest.TestCase):
         error = self.failure("STORE_INVALID", lambda: open_store(self.path.parent))
         self.assertEqual(error.commit_state, "not_applicable")
         self.assertEqual(self.path.read_bytes(), before)
+
+    def test_recovery_rechecks_directory_after_read_only_attempt(self):
+        with self.writer(self.proposed()) as child:
+            self.kill(child)
+        retained = self.path.read_bytes(), self.journal.read_bytes()
+        connect, modes = Database._connect_checked, []
+
+        def changed_before_recovery(db, mode):
+            modes.append(mode)
+            if mode == "rw":
+                self.path.parent.chmod(0o755)
+            return connect(db, mode)
+
+        try:
+            with patch.object(Database, "_connect_checked", changed_before_recovery):
+                error = self.failure("STORE_INVALID", lambda: open_store(self.path.parent))
+            self.assertEqual(error.commit_state, "not_applicable")
+            self.assertEqual(modes, ["ro", "rw"])
+            self.assertEqual((self.path.read_bytes(), self.journal.read_bytes()), retained)
+        finally:
+            self.path.parent.chmod(0o700)
+        self.assertEqual(open_store(self.path.parent).get_operation("example:operator", "publish_material", "request:one")["receipt"],
+                         self.first["receipt"])
+        self.assertEqual(self.path.read_bytes(), self.original_bytes)

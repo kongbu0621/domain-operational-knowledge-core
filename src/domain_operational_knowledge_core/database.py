@@ -45,6 +45,15 @@ def regular(path, *, missing_ok=False):
               and info.st_mode & 0o077 == 0, "Expected an owned private regular file", "STORE_INVALID")
 
 
+def private_directory(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError as exc:
+        raise m.KnowledgeError("STORE_INVALID", "Existing store directory is missing", "not_applicable") from exc
+    m.require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and info.st_mode & 0o077 == 0,
+              "Store must be an owned private directory", "STORE_INVALID")
+
+
 def durable_file(path, raw):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as stream:
@@ -96,9 +105,7 @@ class Database:
         self.root = Path(root).absolute()
         self.path = self.root / "knowledge.sqlite"
         try:
-            info = self.root.lstat()
-            m.require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and info.st_mode & 0o077 == 0,
-                      "Store must be an owned private directory", "STORE_INVALID")
+            private_directory(self.root)
             regular(self.root / "identity.json")
             m.require((self.root / "identity.json").stat().st_size <= m.MAX_REQUEST,
                       "Store identity exceeds its limit", "STORE_INVALID")
@@ -129,6 +136,11 @@ class Database:
             raise m.KnowledgeError("STORE_INVALID", "Stored identity cannot be decoded", "not_applicable") from exc
 
     def _connect_checked(self, mode):
+        private_directory(self.root)
+        regular(self.path)
+        regular(self.root / "identity.json")
+        m.require((self.root / "identity.json").read_bytes() == self.identity_bytes,
+                  "Store identity changed", "STORE_INVALID")
         # SQLite can recover a hot journal before identity verification on a
         # write-capable connection. Guard every connection, including
         # writes from long-lived handles, before SQLite can access the sidecar.
@@ -155,10 +167,6 @@ class Database:
         db = None
         committing = False
         try:
-            regular(self.path)
-            regular(self.root / "identity.json")
-            m.require((self.root / "identity.json").read_bytes() == self.identity_bytes,
-                      "Store identity changed", "STORE_INVALID")
             try:
                 db = self._connect_checked("rw" if write else "ro")
             except sqlite3.Error as exc:
@@ -167,10 +175,6 @@ class Database:
                 # SQLite found an interrupted transaction whose pages must be
                 # rolled back before any reads. Retry once on this same existing
                 # store; SQLite owns recovery and locking, never delete journals.
-                regular(self.path)
-                regular(self.root / "identity.json")
-                m.require((self.root / "identity.json").read_bytes() == self.identity_bytes,
-                          "Store identity changed", "STORE_INVALID")
                 db = self._connect_checked("rw")
             if write:
                 pages = MAX_DATABASE // db.execute("PRAGMA page_size").fetchone()[0]

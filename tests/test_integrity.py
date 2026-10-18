@@ -170,6 +170,48 @@ class IntegrityTests(unittest.TestCase):
             self.assertEqual(error.commit_state, "not_applicable")
         self.assertEqual(open_store(self.root / "knowledge").query("build-guidance", {})["versions"], [])
 
+    def test_existing_handles_recheck_directory_before_read_or_publication(self):
+        first = self.publish()
+        directory = self.path.parent
+        relocated = self.root / "retained-knowledge"
+        for kind in ("permissions", "symlink", "missing"):
+            with self.subTest(kind=kind):
+                before, counts = self.path.read_bytes(), self.ledger_counts()
+                payload = encode(request("publish_material", material(identity="material:" + kind), "request:" + kind))
+                if kind == "permissions":
+                    directory.chmod(0o755)
+                else:
+                    directory.rename(relocated)
+                    if kind == "symlink":
+                        directory.symlink_to(relocated, target_is_directory=True)
+                try:
+                    calls = (
+                        ("not_applicable", lambda: open_store(directory)),
+                        ("not_applicable", lambda: self.store.get_operation("example:operator", "publish_material", "request:one")),
+                        ("not_applicable", lambda: self.store.read_material("material:build")),
+                        ("not_committed", lambda: self.store.execute(payload)),
+                        ("not_committed", lambda: self.store.resume("example:operator", "request:one")),
+                    )
+                    with patch("sqlite3.connect", side_effect=AssertionError("Invalid store directory reached SQLite")):
+                        for expected_state, call in calls:
+                            error = self.failure("STORE_INVALID", call)
+                            self.assertEqual(error.commit_state, expected_state)
+                    if kind == "missing":
+                        self.assertFalse(directory.exists())
+                    retained = directory if kind == "permissions" else relocated
+                    self.assertEqual((retained / "knowledge.sqlite").read_bytes(), before)
+                    self.assertEqual(self.ledger_counts(), counts)
+                finally:
+                    if kind == "permissions":
+                        directory.chmod(0o700)
+                    else:
+                        if kind == "symlink":
+                            directory.unlink()
+                        relocated.rename(directory)
+                self.assertEqual(self.store.execute(payload)["commit_state"], "committed")
+                self.assertEqual(self.store.get_operation("example:operator", "publish_material", "request:one")["receipt"],
+                                 first["receipt"])
+
     def test_receipt_body_must_match_lookup_key_store_and_fingerprint(self):
         self.publish()
         before, ledger_before = self.counts(), self.ledger_counts()
