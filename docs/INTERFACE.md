@@ -98,6 +98,8 @@ material_id 在一个知识库内全局唯一；候选的逻辑去重键为 `(sc
 
 usage_id 是调用方指定的全库唯一稳定 ID。consumer_ref、task_ref、context 沿用材料相应字段的类型与限额。相同 usage_id 和完全相同的作用域/内容换请求 ID 只复用原使用；变更任务、版本或上下文冲突。查询命中不产生 usage，使用登记也不证明外部业务实际执行或授予行动权限。
 
+读取使用及反馈、复用使用或提交新反馈时，还会核对使用记录与唯一创建回执及其事件副本，确认原作用域、任务、消费者、上下文和准确版本未改绑。已保留回执但使用行缺失时，不能把相同 usage_id 当作新使用重新登记；记录与回执矛盾返回 STORE_INVALID，不写入新的反馈材料。可独立核实的历史成功回执仍可返回，当前对象异常另报 UNAVAILABLE；不会自动补造、覆盖或修复记录。修正实际数据问题后可沿原请求继续。
+
 material 是完整的 publish_material body，包含一个新的 material_id、source_ref、task_ref、context、claimed_outcome、gaps、text；正文上限仍为 64 KiB，整个外层请求仍限 256 KiB。source_ref 必须等于原使用的 consumer_ref，task_ref/context 必须与原使用一致。反馈结果是调用方提供的观察，K 不自行推断外部事实。当前反馈入口发布有界文本；其他已有制品仍可通过 register_material 单独引用。
 
 complete_use/correct_feedback 先在 K 保存完整原请求并预留该初始反馈或更正位置，随后经 Ledger 保存精确原件，最后在一个 K 事务内保存运行材料、反馈关联及回执。材料通过 material_id 可被新候选引用，反馈同时保留 usage_id、version_id、predecessor_id。三次提交不是跨库原子事务。相同请求幂等重放；同一反馈位置换请求 ID 且作用域/操作/全部内容相同，返回已有结果；不同内容冲突。另一原请求尚待决时返回 PENDING，先接续它，不能换身份重复发布。

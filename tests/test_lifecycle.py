@@ -227,6 +227,73 @@ class LifecycleTests(LifecycleFixture, unittest.TestCase):
         self.assertEqual(observed["receipt"], first["receipt"])
         self.assertEqual(observed["observation"]["record_status"], "UNAVAILABLE")
 
+    def test_lost_usage_cannot_rebind_retained_receipts_to_another_version(self):
+        original = self.run_op("start_use", adoption(self.version))
+        other = self.run_op("review", review(candidate(self.store, "proposal:other")), "request:other")["receipt"]["result"]["version_id"]
+        with sqlite3.connect(self.root / "knowledge/knowledge.sqlite") as db:
+            saved = db.execute("SELECT * FROM usages WHERE id='usage:build'").fetchone()
+            db.execute("DELETE FROM usages WHERE id='usage:build'")
+        before = self.counts(), self.ledger_counts()
+        unchanged = (self.root / "knowledge/knowledge.sqlite").read_bytes()
+        for version in (self.version, other):
+            error = self.failure("STORE_INVALID", lambda: self.run_op("start_use", adoption(version), "request:replacement"))
+            self.assertEqual(error.commit_state, "not_committed")
+        self.assertEqual((self.counts(), self.ledger_counts()), before)
+        self.assertEqual((self.root / "knowledge/knowledge.sqlite").read_bytes(), unchanged)
+        observed = self.store.get_operation("example:operator", "start_use", "request:one")
+        self.assertEqual(observed["receipt"], original["receipt"])
+        self.assertEqual(observed["observation"]["record_status"], "UNAVAILABLE")
+        # Restore only the exact lost synthetic row; no automatic repair or new ID.
+        with sqlite3.connect(self.root / "knowledge/knowledge.sqlite") as db:
+            db.execute("INSERT INTO usages VALUES (?,?,?,?)", saved)
+        self.assertTrue(self.run_op("start_use", adoption(self.version), "request:replacement")["receipt"]["result"]["reused"])
+        completed = self.run_op("complete_use", completion())
+        self.assertEqual(completed["observation"]["record"]["version_id"], self.version)
+
+    def test_usage_requires_its_original_receipt_before_feedback_publication(self):
+        import json
+        from domain_operational_knowledge_core.model import digest, operation_key
+        original = self.run_op("start_use", adoption(self.version))
+        other = self.run_op("review", review(candidate(self.store, "proposal:other")), "request:other")["receipt"]["result"]["version_id"]
+        key = operation_key("example:operator", "start_use", "request:one")
+        with sqlite3.connect(self.root / "knowledge/knowledge.sqlite") as db:
+            usage = db.execute("SELECT * FROM usages WHERE id='usage:build'").fetchone()
+            receipt = db.execute("SELECT * FROM receipts WHERE key=?", (key,)).fetchone()
+            event = db.execute("SELECT * FROM events WHERE receipt=?", (receipt[2],)).fetchone()
+        for damage in ("lost_receipt", "lost_event", "replaced_usage"):
+            with self.subTest(damage=damage):
+                with sqlite3.connect(self.root / "knowledge/knowledge.sqlite") as db:
+                    if damage == "lost_receipt":
+                        db.execute("DELETE FROM receipts WHERE key=?", (key,))
+                    elif damage == "lost_event":
+                        db.execute("DELETE FROM events WHERE receipt=?", (receipt[2],))
+                    else:
+                        changed = dict(json.loads(usage[3]), version_id=other)
+                        db.execute("UPDATE usages SET version_id=?,fingerprint=?,document=? WHERE id='usage:build'",
+                                   (other, digest(["example:operator", adoption(other)]), canonical(changed).decode()))
+                try:
+                    before = self.counts(), self.ledger_counts()
+                    unchanged = (self.root / "knowledge/knowledge.sqlite").read_bytes()
+                    self.failure("STORE_INVALID", lambda: self.store.get("usage", "usage:build"))
+                    self.failure("STORE_INVALID", lambda: self.run_op("complete_use", completion()))
+                    self.failure("STORE_INVALID", lambda: self.run_op("start_use", adoption(other), "request:replacement"))
+                    self.assertEqual((self.counts(), self.ledger_counts()), before)
+                    self.assertEqual((self.root / "knowledge/knowledge.sqlite").read_bytes(), unchanged)
+                    if damage == "replaced_usage":
+                        replayed = self.run_op("start_use", adoption(self.version))
+                        self.assertEqual(replayed["receipt"], original["receipt"])
+                        self.assertEqual(replayed["observation"]["record_status"], "UNAVAILABLE")
+                finally:
+                    with sqlite3.connect(self.root / "knowledge/knowledge.sqlite") as db:
+                        if damage == "lost_receipt":
+                            db.execute("INSERT INTO receipts VALUES (?,?,?)", receipt)
+                        elif damage == "lost_event":
+                            db.execute("INSERT INTO events VALUES (?,?)", event)
+                        else:
+                            db.execute("UPDATE usages SET version_id=?,fingerprint=?,document=? WHERE id=?", usage[1:] + (usage[0],))
+                self.assertEqual(self.store.get("usage", "usage:build")["record"]["version_id"], self.version)
+        self.assertEqual(self.run_op("complete_use", completion())["observation"]["record"]["version_id"], self.version)
+
     def test_recovery_operation_type_is_strict_and_does_not_write(self):
         before = self.counts(), self.ledger_counts()
         for operation in ([], {}, None, 1, "start_use"):

@@ -6,6 +6,7 @@ import time
 import uuid
 
 from . import model as m
+from . import records
 
 
 class Lifecycle:
@@ -23,6 +24,8 @@ class Lifecycle:
             self.database.document(db, "usages", body["usage_id"])
             m.require(row[0] == fingerprint, "Usage ID binds another adoption", "CONFLICT")
             return dict(usage_id=body["usage_id"], reused=True)
+        m.require(records.usage_origin(db, body["usage_id"]) is None,
+                  "Usage row is missing but its original receipt remains", "STORE_INVALID")
         version = self._active_version(db, body["version_id"])
         m.require(all(body["context"].get(k) == v for k, v in version["conditions"].items()),
                   "Knowledge conditions do not match this use", "CONFLICT")

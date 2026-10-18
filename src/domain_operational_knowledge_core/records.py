@@ -45,6 +45,26 @@ def related(db, table, identity):
 
 
 @checked
+def usage_origin(db, identity):
+    # A missing row is not a new usage ID if a retained receipt still names it.
+    # Reuse receipts cannot replace the unique creating request.
+    selection = """FROM receipts WHERE CASE WHEN json_valid(document) THEN
+        json_extract(document, '$.operation')='start_use'
+        AND json_extract(document, '$.result.usage_id')=? ELSE 0 END"""
+    rows = db.execute("SELECT key " + selection +
+                      " AND CASE WHEN json_valid(document) THEN json_extract(document, '$.result.reused')=0 ELSE 0 END LIMIT 2",
+                      (identity,)).fetchall()
+    m.require(len(rows) <= 1, "Usage has ambiguous creating receipts")
+    if not rows:
+        m.require(db.execute("SELECT 1 " + selection + " LIMIT 1", (identity,)).fetchone() is None,
+                  "Usage has reuse receipts but no creating receipt")
+        return None
+    # The connection already checked this identity against the private marker.
+    store_id = decode(db.execute("SELECT value FROM metadata WHERE key='identity'").fetchone()[0])["store_id"]
+    return receipt(db, rows[0][0], store_id)
+
+
+@checked
 def document(db, table, identity):
     # The table is selected internally, never from caller SQL.
     cursor = db.execute(f"SELECT * FROM {table} WHERE id=?", (identity,))
@@ -127,6 +147,11 @@ def document(db, table, identity):
         original = body(value, names, "start_use", value["scope"])
         m.require(m.digest([value["scope"], original]) == row["fingerprint"]
                   and row["version_id"] == value["version_id"] and value["state_at_start"] == "ACTIVE", "Usage binding differs")
+        origin = usage_origin(db, identity)
+        m.require(origin is not None and origin["scope"] == value["scope"], "Usage creating receipt is missing or unrelated")
+        request = dict(schema=m.SCHEMA, scope=value["scope"], operation="start_use",
+                       request_id=origin["request_id"], body=original)
+        m.require(m.digest(request) == origin["fingerprint"], "Usage differs from its creating request")
         version = related(db, "versions", value["version_id"])
         m.require(all(value["context"].get(k) == v for k,v in version["conditions"].items()), "Usage conditions differ")
     elif kind == "feedback":
