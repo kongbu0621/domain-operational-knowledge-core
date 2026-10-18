@@ -15,6 +15,11 @@ def capture_binding(path, anchor_artifact_id):
     m.require("\x00" not in str(path), "Ledger path must not contain NUL")
     try:
         path = str(path.resolve(strict=True))
+    except (OSError, RuntimeError) as exc:
+        # Python 3.12 reports symlink loops from resolve as RuntimeError.
+        # Keep this handling around path resolution, not Ledger execution.
+        raise m.KnowledgeError("IO_ERROR", "Existing Ledger path cannot be resolved") from exc
+    try:
         with open_ledger(path) as handle:
             anchor = handle.get_record("artifact", anchor_artifact_id)
     except LedgerError as exc:

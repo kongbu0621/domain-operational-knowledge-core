@@ -99,9 +99,12 @@ def durable_file(path, raw):
 
 
 def initialize(path, binding):
-    root = Path(path).absolute()
-    m.require("\x00" not in str(root), "Store path must not contain NUL")
-    m.require(not root.exists() and not root.is_symlink(), "Store target already exists", "CONFLICT")
+    try:
+        root = Path(path).absolute()
+        m.require("\x00" not in str(root), "Store path must not contain NUL")
+        m.require(not root.exists() and not root.is_symlink(), "Store target already exists", "CONFLICT")
+    except OSError as exc:
+        raise m.KnowledgeError("IO_ERROR", "Store target cannot be inspected") from exc
     identity = dict(schema=m.SCHEMA, store_id=str(uuid.uuid4()), ledger=binding)
     try:
         identity_bytes = m.canonical(identity)
@@ -146,7 +149,10 @@ def initialize(path, binding):
 
 class Database:
     def __init__(self, root):
-        self.root = Path(root).absolute()
+        try:
+            self.root = Path(root).absolute()
+        except OSError as exc:
+            raise m.KnowledgeError("IO_ERROR", "Store path cannot be resolved", "not_applicable") from exc
         self.path = self.root / "knowledge.sqlite"
         try:
             private_directory(self.root)
