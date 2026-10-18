@@ -66,16 +66,66 @@ class Knowledge:
         db.execute("INSERT INTO events(receipt) VALUES (?)", (encoded,))
         return receipt
 
-    def _material(self, db, identity, *, verify=True):
+    def _material_snapshot(self, db, identity):
         material = self.database.document(db, "materials", identity)
+        # A logical material has one creating request; later keys only reuse it.
+        rows = db.execute("""SELECT key FROM receipts
+            WHERE CASE WHEN json_valid(document) THEN
+                  json_extract(document, '$.operation') IN ('publish_material', 'register_material')
+              AND json_extract(document, '$.result.material_id')=?
+              AND json_extract(document, '$.result.reused')=0 ELSE 0 END LIMIT 2""", (identity,)).fetchall()
+        m.require(len(rows) == 1, "Material creating receipt is missing or ambiguous", "STORE_INVALID")
+        origin = self.database.receipt(db, rows[0][0])
+        m.require(origin["scope"] == material["scope"], "Material source scope differs", "STORE_INVALID")
+        fingerprint = db.execute("SELECT fingerprint FROM materials WHERE id=?", (identity,)).fetchone()[0]
+        snapshot = material, origin, fingerprint
+        if origin["operation"] == "register_material":
+            self._verify_material_binding(snapshot)
+        return snapshot
+
+    def _verify_material_binding(self, snapshot, *, text=None):
+        material, origin, fingerprint = snapshot
+        body = {key: value for key, value in material.items() if key not in ("scope", "recorded_at")}
+        if origin["operation"] == "publish_material":
+            del body["reference"]
+            body["text"] = text
+        original = dict(schema=m.SCHEMA, scope=origin["scope"], operation=origin["operation"],
+                        request_id=origin["request_id"], body=body)
+        m.require(m.digest([origin["scope"], origin["operation"], body]) == fingerprint
+                  and m.digest(original) == origin["fingerprint"],
+                  "Material differs from its creating request", "STORE_INVALID")
+        if origin["operation"] == "publish_material":
+            key = m.operation_key(origin["scope"], origin["operation"], origin["request_id"])
+            expected = self.ledger.requests(key, body)[3]
+            m.require(material["reference"] == expected, "Published material version differs from its original request", "STORE_INVALID")
+
+    def _read_material(self, snapshot):
+        material, origin, _ = snapshot
+        entries = self.ledger.read(material["reference"], material["task_ref"])
+        text = None
+        if origin["operation"] == "publish_material":
+            m.require(len(entries) == 1 and entries[0][0] == "@blob", "Published material root differs", "STORE_INVALID")
+            try:
+                text = entries[0][1].decode("utf-8")
+            except UnicodeError as exc:
+                raise m.KnowledgeError("STORE_INVALID", "Published text cannot be decoded", "not_applicable") from exc
+        self._verify_material_binding(snapshot, text=text)
+        return entries
+
+    def _material(self, db, identity, *, verify=True):
+        snapshot = self._material_snapshot(db, identity)
         if verify:
-            self.ledger.read(material["reference"], material["task_ref"])
-        return material
+            self._read_material(snapshot)
+        return snapshot[0]
 
     def _material_identity(self, db, body, fingerprint):
         row = db.execute("SELECT fingerprint FROM materials WHERE id=?", (body["material_id"],)).fetchone()
         if row:
             m.require(row[0] == fingerprint, "Material ID already binds different content", "CONFLICT")
+            # A new receipt must not endorse replaced metadata merely because
+            # the old logical fingerprint column still matches the input.
+            snapshot = self._material_snapshot(db, body["material_id"])
+            self._verify_material_binding(snapshot, text=body.get("text"))
             return True
         return False
 
@@ -224,17 +274,20 @@ class Knowledge:
                 ids = sorted(set(ids + candidate["material_ids"]))
                 document["version_state"] = (db.execute("SELECT state FROM versions WHERE id=?", (document["version_id"],)).fetchone()[0]
                                              if document["version_id"] else None)
-            materials = [self._material(db, item, verify=False) for item in ids]
+            materials = [self._material_snapshot(db, item) for item in ids]
         return m.output(dict(record=document, materials=self._availability(materials), observed_at=int(time.time())))
 
     def _availability(self, materials):
         observed = []
-        for material in materials:
+        for snapshot in materials:
+            material = snapshot[0]
             result = dict(material_id=material["material_id"])
             try:
-                self.ledger.read(material["reference"], material["task_ref"])
+                self._read_material(snapshot)
                 result.update(status="VERIFIED", reference=material["reference"])
             except m.KnowledgeError as exc:
+                if exc.code == "STORE_INVALID":
+                    raise
                 result.update(status="UNAVAILABLE" if exc.code in ("IDENTITY_CONFLICT", "INTEGRITY_FAILURE") or
                               exc.details.get("ledger_code") in ("NOT_FOUND", "INTEGRITY_FAILURE") else "UNKNOWN",
                               code=exc.code, details=exc.details)
@@ -295,8 +348,9 @@ class Knowledge:
     def read_material(self, identity):
         m.identity(identity)
         with self.database.connection() as db:
-            material = self._material(db, identity, verify=False)
-        entries = self.ledger.read(material["reference"], material["task_ref"])
+            snapshot = self._material_snapshot(db, identity)
+        material = snapshot[0]
+        entries = self._read_material(snapshot)
         return m.output(dict(material_id=identity, reference=material["reference"], content_verified=True,
                              entries=[dict(entry_key=key, encoding="base64", data=base64.b64encode(raw).decode("ascii")) for key, raw in entries]))
 

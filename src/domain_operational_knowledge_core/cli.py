@@ -54,7 +54,7 @@ def parser():
     return root
 
 
-def main(argv=None):
+def _run(argv=None):
     command = None
     try:
         args = parser().parse_args(argv)
@@ -86,13 +86,34 @@ def main(argv=None):
             exc = m.KnowledgeError(exc.code, exc.message, "not_applicable", details=exc.details)
         elif command in ("init", "write", "resume") and exc.commit_state == "not_applicable":
             exc = m.KnowledgeError(exc.code, exc.message, "not_committed", details=exc.details)
-        sys.stdout.buffer.write(m.canonical(exc.as_dict()) + b"\n")
+        try:
+            result = m.output(exc.as_dict())
+        except m.KnowledgeError:
+            # Parser diagnostics can include arbitrarily many CLI arguments.
+            # Preserve the known commit state when the error itself is too big.
+            exc = m.KnowledgeError("LIMIT", "Error response exceeds 1 MiB; inspect the original request",
+                                   exc.commit_state)
+            result = exc.as_dict()
+        sys.stdout.buffer.write(m.canonical(result) + b"\n")
+        sys.stdout.buffer.flush()
         return {"NOT_FOUND": 3, "CONFLICT": 4, "IDENTITY_CONFLICT": 4, "BUSY": 6}.get(exc.code, 2)
+
+
+def main(argv=None):
+    try:
+        return _run(argv)
     except (OSError, ValueError):
         # A failed output channel may provide no JSON. Never imply a rollback.
+        # Prevent a second buffered flush at interpreter shutdown from
+        # replacing this handled I/O exit with an unhandled exit code 120.
+        try:
+            with open(os.devnull, "wb") as sink:
+                os.dup2(sink.fileno(), sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
         try:
             sys.stderr.write("I/O failure; inspect the original request before retrying.\n")
-        except OSError:
+        except (OSError, ValueError):
             pass
         return 1
 

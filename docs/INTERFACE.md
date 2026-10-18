@@ -97,6 +97,10 @@ resume 核对原 Ledger 操作的幂等身份、指纹及结果；尚未找到�
 
 读取或接续 K 持久记录时也核对绑定：待决输入必须匹配原请求键、指纹和材料预留；回执必须匹配查询键、库身份、指纹索引及同事务保留的完整事件回执，结果 ID、reused 和时间也不能单独替换。审查重新计算候选内容摘要，知识版本读取核对已接受候选、审查依据及选中记录的索引。字段、摘要或关联不一致返回 STORE_INVALID，保留原记录，不执行不同的请求或用重算新摘要掩盖内容改变。这是当前操作所涉及记录的一致性检查，不是整库审计、密码学防篡改或快照回滚检测。
 
+材料还需对应唯一的初次创建回执及其事件原件；后续 reused 回执不能替代初次创建绑定。register_material 直接核对结构化材料、准确引用与原请求指纹；publish_material 读取原文字节后重建原请求，核对来源、任务、上下文、结果声明、缺口和正文，并核对原请求确定的 Artifact/Version/Blob 身份。即使另一版本正文完全相同，也不能替换原版本。发现材料绑定不一致时拒绝读取、查询或新准入，原成功回执仍单独保留。
+
+发布原件不可读时，仍可返回结构化记录与明确的材料 UNAVAILABLE/UNKNOWN，但不能据此声明全部材料绑定已重新验证。相同逻辑材料换请求 ID 时，利用这次提供的原正文核对已有记录及初次请求，不产生新原件；该复用回执仍不证明原件当前可读。本轮检查兼容既有数据格式，不补写摘要或迁移数据库。
+
 pending 提供原请求及最近失败诊断；诊断 JSON 损坏或报告超限可能使这次报告读取失败。resume 独立读取并核对原持久意图或成功回执，不依赖诊断报告的解码和输出大小。诊断错误不删除原件，也不阻止已验证原请求按原 Ledger 身份接续；请求或回执自身的矛盾仍拒绝。
 
 写成功返回 status=COMMITTED、commit_state=committed、replayed、receipt、observation。receipt 是不可变的原提交记录，含 store_id、scope、operation、request_id、fingerprint、recorded_at、result。result 包含 material_id，或 candidate_id/candidate_sha256，或 review_id/version_id，以及 reused。REJECT 的 version_id 为 null。
@@ -111,7 +115,7 @@ query 按 kind 相等且 conditions 的每个键值均在 context 中精确匹�
 
 ## 限额与错误
 
-请求最多 256 KiB，JSON 深度 12、节点数 10000；输出最多 1 MiB，超限拒绝且不截断，查询可缩小分页。SQLite 主库最多 256 MiB；空间或锁问题不允许自动另建空库。目录 0700、文件 0600，要求当前用户拥有；活跃数据库只用于可靠本地文件系统。
+请求最多 256 KiB，JSON 深度 12、节点数 10000；输出最多 1 MiB，超限拒绝且不截断，查询可缩小分页。错误响应也受此限额约束；诊断本身超限时返回简短 LIMIT，保留已知 commit_state。SQLite 主库最多 256 MiB；空间或锁问题不允许自动另建空库。目录 0700、文件 0600，要求当前用户拥有；活跃数据库只用于可靠本地文件系统。
 
 KnowledgeError 提供 code、message、commit_state、details；CLI 错误为同名字段加 status=ERROR。常见 code：INVALID_INPUT、UNSUPPORTED_VERSION、LIMIT、NOT_FOUND、CONFLICT、IDENTITY_CONFLICT、PENDING、MATERIAL_UNAVAILABLE、BUSY、STORE_INVALID、IO_ERROR。Ledger 错误通过 details.ledger_code 和 ledger_commit_state 保留来源分类。
 
@@ -123,4 +127,4 @@ KnowledgeError 提供 code、message、commit_state、details；CLI 错误为同
 | `committed` | 原 K 提交或初始化已确认，后续输出或观察仍可能失败 |
 | `not_applicable` | 只读观察，不表示有写入被撤销 |
 
-CLI 成功退出 0，NOT_FOUND 为 3，CONFLICT/IDENTITY_CONFLICT 为 4，BUSY 为 6，其他领域错误为 2，文件/输出 I/O 失败为 1。进程被杀或输出管道失效可能没有 JSON；不能单凭退出码认定未提交，按原请求核对。
+CLI 成功退出 0，NOT_FOUND 为 3，CONFLICT/IDENTITY_CONFLICT 为 4，BUSY 为 6，其他领域错误为 2，文件/输出 I/O 失败为 1。成功或错误响应的写入、刷新失败均按 I/O 失败处理；已处理的 stdout 失败不会在解释器退出时再次刷新并覆盖退出码。进程被杀或输出管道失效可能没有完整 JSON；不能单凭退出码认定未提交，按原请求核对。
