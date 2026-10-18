@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools==84.0.0", "wheel==0.48.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "domain-operational-knowledge-core"
+version = "0.1.0a1"
+description = "Local operational knowledge candidates, explicit review and exact-version material references"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "kongbu0621"}]
+dependencies = ["infra-artifact-ledger==0.2.0a1"]
+classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3.12", "Operating System :: POSIX :: Linux"]
+
+[project.scripts]
+operational-knowledge = "domain_operational_knowledge_core.cli:main"
+
+[project.urls]
+Repository = "https://github.com/kongbu0621/domain-operational-knowledge-core"
+
+[tool.setuptools.packages.find]
+where = ["src"]
