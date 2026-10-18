@@ -56,7 +56,7 @@ material_id 在一个知识库内全局唯一；候选的逻辑去重键为 `(sc
 未知字段、重复 JSON key、非法 UTF-8、BOM、孤立 surrogate、浮点数、NaN、Infinity 均拒绝。所有字段均必需，不隐式填补缺少的来源、条件或缺口数组。
 
 - 稳定 K ID 长 3–128 个 ASCII 字符，首字符为字母或数字，其余允许字母、数字、`.`、`_`、`:`、`/`、`-`。scope 最多 128 UTF-8 bytes。
-- source_ref、task_ref、reviewer 最多 512 UTF-8 bytes，reason 最多 4096 bytes；字符串拒绝 NUL。
+- source_ref、task_ref、reviewer 最多 512 UTF-8 bytes，reason 最多 4096 bytes；字符串拒绝 NUL。task_ref 同时拒绝 U+0000–U+001F 和 U+007F 控制字符，与 Ledger 来源引用约束一致；在保存发布意图或写 Ledger 前检查。
 - `claimed_outcome` 为 SUCCEEDED、FAILED、CANCELLED 或 UNKNOWN，表示调用方声明，K 不验证外部任务执行事实。
 - `context`、`conditions` 为最多 16 项的字符串映射；键匹配 `[a-z][a-z0-9_]{0,31}`，值 1–256 UTF-8 bytes。
 - `kind` 为 1–64 UTF-8 bytes 的类型名；content 为 1–65536 UTF-8 bytes，text 允许空内容且至多 65536 bytes。
@@ -92,6 +92,8 @@ reference 恰含 artifact_id、version_id、entries。entries 与实际根内容
 publish_material 先在 K 提交原请求及待决状态，随后依固定身份调用 Ledger create/append，最后提交 K 材料引用及成功回执、移除待决输入。原件成功写入但 K 尚未完成时，可以只存在原件；这不是跨库原子事务，也不重新执行生产任务。原输入在待决期间保留，成功后 K 保存结构化材料引用及请求指纹，原件从 Ledger 读取。
 
 resume 核对原 Ledger 操作的幂等身份、指纹及结果；尚未找到时只重试同一确定请求，由 Ledger 的同键事务幂等保证收敛。它不换对象 ID 或 key，也不把一次 NOT_FOUND 当作另起一次写入的依据。失败不会永久封禁该请求；身份冲突应先核对，不能重命名绕过。
+
+读取或接续 K 持久记录时也核对绑定：待决输入必须匹配原请求键、指纹和材料预留；回执必须匹配查询键、库身份和指纹索引。审查重新计算候选内容摘要，知识版本读取核对已接受候选、审查依据及选中记录的索引。字段、摘要或关联不一致返回 STORE_INVALID，保留原记录，不执行不同的请求或用重算新摘要掩盖内容改变。这是当前操作所涉及记录的一致性检查，不是整库审计、密码学防篡改或快照回滚检测。
 
 写成功返回 status=COMMITTED、commit_state=committed、replayed、receipt、observation。receipt 是不可变的原提交记录，含 store_id、scope、operation、request_id、fingerprint、recorded_at、result。result 包含 material_id，或 candidate_id/candidate_sha256，或 review_id/version_id，以及 reused。REJECT 的 version_id 为 null。
 

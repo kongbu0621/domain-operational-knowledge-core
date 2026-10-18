@@ -146,6 +146,12 @@ def request(raw):
     text(value["scope"], maximum=128)
     identity(value["request_id"])
     operation, body = value["operation"], value["body"]
+    validate_body(operation, body)
+    return value
+
+
+def validate_body(operation, body):
+    """Validate domain input independently of a serialized request envelope."""
     require(type(operation) is str and operation in OPERATIONS, "Unsupported operation")
     if operation in ("register_material", "publish_material"):
         fields(body, "material_id source_ref task_ref context claimed_outcome gaps " +
@@ -153,6 +159,8 @@ def request(raw):
         identity(body["material_id"])
         text(body["source_ref"])
         text(body["task_ref"])
+        require(not any(ord(char) < 32 or ord(char) == 127 for char in body["task_ref"]),
+                "Task reference cannot contain control characters")
         context(body["context"])
         require(body["claimed_outcome"] in ("SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"), "Invalid outcome")
         require(type(body["gaps"]) is list and len(body["gaps"]) <= 16, "Invalid gaps")
@@ -177,7 +185,6 @@ def request(raw):
         text(body["reviewer"])
         text(body["reason"], maximum=4096)
         refs(body["evidence_material_ids"])
-    return value
 
 
 def operation_key(scope, operation, request_id):

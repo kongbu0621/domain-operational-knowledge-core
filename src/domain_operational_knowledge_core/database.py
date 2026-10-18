@@ -10,6 +10,7 @@ import stat
 import uuid
 
 from . import model as m
+from . import records
 
 APP_ID = 0x4B4E5731
 MAX_DATABASE = 256 * 1024 * 1024
@@ -116,6 +117,8 @@ class Database:
             raise
         except FileNotFoundError as exc:
             raise m.KnowledgeError("STORE_INVALID", "Existing store files are missing", "not_applicable") from exc
+        except OSError as exc:
+            raise m.KnowledgeError("IO_ERROR", "Existing store files cannot be read", "not_applicable") from exc
         except (ValueError, TypeError, AttributeError) as exc:
             raise m.KnowledgeError("STORE_INVALID", "Stored identity cannot be decoded", "not_applicable") from exc
 
@@ -164,15 +167,8 @@ class Database:
             if db is not None:
                 db.close()
 
-    @staticmethod
-    def document(db, table, identity):
-        # table is selected by internal code, never caller SQL.
-        row = db.execute(f"SELECT document FROM {table} WHERE id=?", (identity,)).fetchone()
-        m.require(row is not None, "Object not found", "NOT_FOUND")
-        try:
-            document = m.decode(row[0].encode(), maximum=m.MAX_RESPONSE)
-            field = dict(materials="material_id", candidates="candidate_id", reviews="review_id", versions="version_id")[table]
-            m.require(document.get(field) == identity, "Stored row identity differs", "STORE_INVALID")
-            return document
-        except (m.KnowledgeError, AttributeError) as exc:
-            raise m.KnowledgeError("STORE_INVALID", "Stored object cannot be decoded", "not_applicable") from exc
+    document = staticmethod(records.document)
+    pending = staticmethod(records.pending)
+
+    def receipt(self, db, key):
+        return records.receipt(db, key, self.identity["store_id"])

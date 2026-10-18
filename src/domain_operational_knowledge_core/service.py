@@ -51,12 +51,11 @@ class Knowledge:
         identity = database.identity
         self.ledger = MaterialLedger(identity["ledger"], identity["store_id"])
 
-    @staticmethod
-    def _receipt(db, key, fingerprint):
-        row = db.execute("SELECT fingerprint,document FROM receipts WHERE key=?", (key,)).fetchone()
-        if row:
-            m.require(row[0] == fingerprint, "Request ID already binds different content", "CONFLICT")
-            return json.loads(row[1])
+    def _receipt(self, db, key, fingerprint):
+        receipt = self.database.receipt(db, key)
+        if receipt:
+            m.require(receipt["fingerprint"] == fingerprint, "Request ID already binds different content", "CONFLICT")
+            return receipt
 
     def _commit(self, db, request, key, fingerprint, result):
         receipt = dict(store_id=self.database.identity["store_id"], scope=request["scope"], operation=request["operation"],
@@ -93,8 +92,8 @@ class Knowledge:
             old = self._receipt(db, key, fingerprint)
             if old:
                 return old, True
-            original = db.execute("SELECT fingerprint FROM pending WHERE key=?", (key,)).fetchone()
-            m.require(original is None or original == (fingerprint,), "Pending request ID binds different content", "CONFLICT")
+            original = self.database.pending(db, key)
+            m.require(original is None or m.digest(original) == fingerprint, "Pending request ID binds different content", "CONFLICT")
             if self._material_identity(db, body, logical):
                 return self._commit(db, request, key, fingerprint, dict(material_id=body["material_id"], reused=True)), False
             pending = db.execute("SELECT key,fingerprint FROM pending WHERE material_id=?", (body["material_id"],)).fetchone()
@@ -108,8 +107,8 @@ class Knowledge:
                 old = self._receipt(db, key, fingerprint)
                 if old:
                     return old, True
-                pending = db.execute("SELECT fingerprint FROM pending WHERE key=?", (key,)).fetchone()
-                m.require(pending == (fingerprint,), "Original pending material changed", "STORE_INVALID")
+                pending = self.database.pending(db, key)
+                m.require(pending is not None and m.digest(pending) == fingerprint, "Original pending material changed", "STORE_INVALID")
                 self._save_material(db, request, reference)
                 receipt = self._commit(db, request, key, fingerprint, dict(material_id=body["material_id"], reused=False))
                 db.execute("DELETE FROM pending WHERE key=?", (key,))
@@ -169,6 +168,7 @@ class Knowledge:
         fingerprint = m.digest(body)
         row = db.execute("SELECT id,fingerprint FROM candidates WHERE scope=? AND proposal_id=?", (scope, body["proposal_id"])).fetchone()
         if row:
+            self.database.document(db, "candidates", row[0])
             m.require(row[1] == fingerprint, "Proposal ID already binds different content", "CONFLICT")
             return dict(candidate_id=row[0], candidate_sha256=fingerprint, reused=True)
         for identity in body["material_ids"]:
@@ -183,10 +183,10 @@ class Knowledge:
         candidate = self.database.document(db, "candidates", body["candidate_id"])
         m.require(candidate["candidate_sha256"] == body["candidate_sha256"], "Review target digest differs", "CONFLICT")
         fingerprint = m.digest(body)
-        row = db.execute("SELECT fingerprint,document FROM reviews WHERE candidate_id=?", (body["candidate_id"],)).fetchone()
+        row = db.execute("SELECT fingerprint,id FROM reviews WHERE candidate_id=?", (body["candidate_id"],)).fetchone()
         if row:
             m.require(row[0] == fingerprint, "Candidate already has a different final decision", "CONFLICT")
-            old = json.loads(row[1])
+            old = self.database.document(db, "reviews", row[1])
             return dict(review_id=old["review_id"], version_id=old["version_id"], reused=True)
         state = db.execute("SELECT state FROM candidates WHERE id=?", (body["candidate_id"],)).fetchone()[0]
         m.require(state == "PENDING", "Review requires a pending candidate", "CONFLICT")
@@ -249,23 +249,22 @@ class Knowledge:
     def get_operation(self, scope, operation, request_id):
         key = m.operation_key(scope, operation, request_id)
         with self.database.connection() as db:
-            row = db.execute("SELECT document FROM receipts WHERE key=?", (key,)).fetchone()
-            m.require(row is not None, "Successful operation not found; inspect pending publication separately", "NOT_FOUND")
-            receipt = json.loads(row[0])
+            receipt = self.database.receipt(db, key)
+            m.require(receipt is not None, "Successful operation not found; inspect pending publication separately", "NOT_FOUND")
         return m.output(dict(receipt=receipt, observation=self._observation(receipt)))
 
     @read_only
     def pending(self, scope, request_id):
         key = m.operation_key(scope, "publish_material", request_id)
         with self.database.connection() as db:
-            row = db.execute("SELECT request FROM pending WHERE key=?", (key,)).fetchone()
-            if row is None:
-                old = db.execute("SELECT document FROM receipts WHERE key=?", (key,)).fetchone()
+            request = self.database.pending(db, key)
+            if request is None:
+                old = self.database.receipt(db, key)
                 m.require(old is not None, "Request not found", "NOT_FOUND")
-                return dict(state="COMMITTED", receipt=json.loads(old[0]))
+                return dict(state="COMMITTED", receipt=old)
             failures = [json.loads(item[0]) for item in db.execute(
                 "SELECT document FROM failures WHERE key=? ORDER BY sequence DESC LIMIT 10", (key,))]
-            return m.output(dict(state="PENDING", request=json.loads(row[0]), recent_failures=failures))
+            return m.output(dict(state="PENDING", request=request, recent_failures=failures))
 
     @writing
     def resume(self, scope, request_id):
@@ -291,13 +290,13 @@ class Knowledge:
             m.identity(after)
         m.require(type(after) is str and type(limit) is int and 1 <= limit <= 20, "Invalid page bounds")
         with self.database.connection() as db:
-            rows = db.execute("""SELECT id,document FROM versions WHERE state='ACTIVE' AND kind=? AND id>?
+            rows = db.execute("""SELECT id FROM versions WHERE state='ACTIVE' AND kind=? AND id>?
                 AND NOT EXISTS (SELECT 1 FROM json_each(versions.conditions) c
                   WHERE json_extract(?, '$.' || c.key) IS NOT c.value) ORDER BY id LIMIT ?""",
                               (kind, after, m.canonical(context).decode(), limit + 1)).fetchall()
             versions = []
-            for identity, raw in rows[:limit]:
-                version = json.loads(raw)
+            for (identity,) in rows[:limit]:
+                version = self.database.document(db, "versions", identity)
                 sources = [self._material(db, item) for item in version["material_ids"]]
                 versions.append(dict(version, state="ACTIVE", content_sha256=hashlib.sha256(version["content"].encode()).hexdigest(),
                                      sources=sources))

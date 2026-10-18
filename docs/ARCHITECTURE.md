@@ -6,7 +6,7 @@
 
 当前采用 Python 3.12 核心库和 CLI，在单机受信环境内运行。知识核心不依赖 P、特定 Agent、LLM 或向量数据库。
 
-当前包内 model 校验有界输入，database 管理 K 的 SQLite 事务和身份，ledger 只调用 Ledger 公共 API，service 实现材料/候选/审查/查询，cli 处理文件与 JSON。publish_material 先提交待决输入，再完成 Ledger create/append，最后提交 K 引用和回执；进程退出后以原请求接续。审查决定、候选终态、知识版本与回执在同一 K 事务内提交。
+当前包内 model 校验有界输入，database 管理 K 的 SQLite 事务和身份，records 核对当前操作涉及的持久记录内容与索引绑定，ledger 只调用 Ledger 公共 API，service 实现材料/候选/审查/查询，cli 处理文件与 JSON。publish_material 先提交待决输入，再完成 Ledger create/append，最后提交 K 引用和回执；进程退出后以原请求接续。审查决定、候选终态、知识版本与回执在同一 K 事务内提交。
 
 | 组成 | 本仓责任 | 外部边界 |
 | --- | --- | --- |
