@@ -100,23 +100,31 @@ def durable_file(path, raw):
 
 def initialize(path, binding):
     root = Path(path).absolute()
+    m.require("\x00" not in str(root), "Store path must not contain NUL")
     m.require(not root.exists() and not root.is_symlink(), "Store target already exists", "CONFLICT")
+    identity = dict(schema=m.SCHEMA, store_id=str(uuid.uuid4()), ledger=binding)
+    try:
+        identity_bytes = m.canonical(identity)
+    except UnicodeError as exc:
+        raise m.KnowledgeError("INVALID_INPUT", "Store identity must be representable as UTF-8") from exc
+    # Validate before creating anything, and persist the exact validated bytes
+    # in both copies. A filesystem path accepted by Linux need not fit JSON.
+    m.decode(identity_bytes)
     try:
         root.mkdir(mode=0o700)
     except FileExistsError as exc:
         raise m.KnowledgeError("CONFLICT", "Store target already exists") from exc
     except OSError as exc:
         raise m.KnowledgeError("IO_ERROR", "Store directory cannot be created") from exc
-    identity = dict(schema=m.SCHEMA, store_id=str(uuid.uuid4()), ledger=binding)
     database = root / "knowledge.sqlite"
     try:
         durable_file(database, b"")
         with closing(sqlite3.connect(database)) as db, db:
             db.executescript("BEGIN IMMEDIATE;" + SQL)
-            db.execute("INSERT INTO metadata VALUES ('identity',?)", (m.canonical(identity).decode(),))
+            db.execute("INSERT INTO metadata VALUES ('identity',?)", (identity_bytes.decode(),))
             db.execute(f"PRAGMA application_id={APP_ID}")
             db.execute("PRAGMA user_version=1")
-        durable_file(root / "identity.json", m.canonical(identity))
+        durable_file(root / "identity.json", identity_bytes)
         fd = os.open(root, os.O_DIRECTORY)
         try:
             os.fsync(fd)

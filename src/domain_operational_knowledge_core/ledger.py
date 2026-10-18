@@ -11,8 +11,10 @@ from . import model as m
 
 def capture_binding(path, anchor_artifact_id):
     m.text(anchor_artifact_id, maximum=256)
+    path = Path(path)
+    m.require("\x00" not in str(path), "Ledger path must not contain NUL")
     try:
-        path = str(Path(path).resolve(strict=True))
+        path = str(path.resolve(strict=True))
         with open_ledger(path) as handle:
             anchor = handle.get_record("artifact", anchor_artifact_id)
     except LedgerError as exc:
