@@ -1,5 +1,11 @@
 # 开发与接续记录
 
+## 真实恢复的备份完整性复核（2026-10-19）
+
+复核发现上次私有验收虽从副本读取数据库，部分配置与信任回执仍依赖原数据目录。P 已修正验收入口：在隔离命名空间隐藏原数据目录，五份关键材料只取备份并核对独立摘要；数据库副本身份及只读限制在实际对账进程内核对。旧验收在备份缺失归档回执时仍通过的现象已复现并保留。
+
+七个缺失、改动或误读原库的反例均拒绝，完整备份两次只读对账通过；K 原审查、版本、使用、反馈和材料内容与保留基线一致。原存储、原备份及历史证据未变，产品代码和安装未改。成功仍以兼容安装可用为前提，不包含消费者启用、写身份迁移或整机安装恢复。具体证据与边界见 P 的[开发记录](https://github.com/kongbu0621/control-production-plane/blob/main/docs/DEVELOPMENT.md)和[组合恢复核对](https://github.com/kongbu0621/control-production-plane/blob/main/docs/COMBINED_RECOVERY.md)。
+
 ## 真实试点的只读组合恢复（2026-10-19）
 
 Owner 接受继续推进后，P 沿已有真实知识采用任务完成一次 P/K/Ledger 历史只读恢复。现场复用 K `0.1.0a2`，九个模块与 `f44d21b932e03fb1d9443de3cf8a46818642936f` 一致；本仓产品未修改或升级。详细范围与保留证据结论集中在 P 的[组合恢复核对](https://github.com/kongbu0621/control-production-plane/blob/main/docs/COMBINED_RECOVERY.md)和[开发记录](https://github.com/kongbu0621/control-production-plane/blob/main/docs/DEVELOPMENT.md)。
