@@ -1,6 +1,6 @@
 # 公共接口：运行知识生命周期
 
-`0.1.0a2` alpha，Linux / Python 3.12，单个受信本地数据域。已实现材料、候选、审查、查询、使用登记、反馈及更正、修订和退休；组合快照恢复和 P 适配尚未实现。
+`0.1.0a2` alpha，Linux / Python 3.12，单个受信本地数据域。已实现材料、候选、审查、查询、使用登记、反馈及更正、修订和退休；P 仓已通过这些公共接口实现知识查询、采用与反馈适配；本仓没有组合快照或副本启用接口。P 仓的五个安装态合成恢复窗口与操作规程见[组合恢复核对](https://github.com/kongbu0621/control-production-plane/blob/main/docs/COMBINED_RECOVERY.md)，不代表真实副本已切换。
 
 ## 库与 CLI
 
