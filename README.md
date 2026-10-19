@@ -28,7 +28,7 @@ K 已接通 Ledger 公共库的有界材料读写；P 已通过 K 公共库接�
 | --- | --- |
 | **domain-operational-knowledge-core（K）** | 管理运行知识的候选、明确审查、版本、适用范围、使用反馈及修订与退休 |
 | [infra-artifact-ledger](https://github.com/kongbu0621/infra-artifact-ledger) | 原始材料存储：K 已通过公共接口保存、读取准确制品版本并核对内容；知识状态由 K 自己保存 |
-| [control-production-plane（P）](https://github.com/kongbu0621/control-production-plane) | 已接入的消费者与材料提供方：推进生产任务，采用已准入的准确知识版本，回流原任务结果；学习候选自动投递仍待接续 |
+| [control-production-plane（P）](https://github.com/kongbu0621/control-production-plane) | 已接入的消费者与材料提供方：推进生产任务，采用已准入的准确知识版本，回流原任务结果；已接通明确学习候选的材料发布与投递，准入仍须另行明确审查 |
 | [infra-local-hand](https://github.com/kongbu0621/infra-local-hand) | 间接材料来源：执行结果经 P 或其他调用方组织，原件保存到 Ledger 后可被 K 的运行材料引用；K 本身不执行任务，也不要求安装 Local Hand |
 | 独立应用或 Agent | 可通过本库/CLI 提交材料、候选和审查，查询知识；登记准确版本的使用与效果，不依赖 P 的内部对象 |
 
