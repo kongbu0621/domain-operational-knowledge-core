@@ -1,6 +1,6 @@
 # 公共接口：运行知识生命周期
 
-`0.1.0a2` alpha，Linux / Python 3.12，单个受信本地数据域。已实现材料、候选、审查、查询、使用登记、反馈及更正、修订和退休；P 仓已通过这些公共接口实现知识查询、采用与反馈适配；本仓没有组合快照或副本启用接口。P 仓的五个安装态合成恢复窗口与操作规程见[组合恢复核对](https://github.com/kongbu0621/control-production-plane/blob/main/docs/COMBINED_RECOVERY.md)，不代表真实副本已切换。
+`0.1.0a3` alpha，Linux / Python 3.12，单个受信本地数据域。已实现材料、候选、审查、查询、使用登记、反馈及更正、修订和退休；P 仓已通过这些公共接口实现知识查询、采用与反馈适配；本仓没有组合快照或副本启用接口。P 仓的五个安装态合成恢复窗口与操作规程见[组合恢复核对](https://github.com/kongbu0621/control-production-plane/blob/main/docs/COMBINED_RECOVERY.md)，不代表真实副本已切换。
 
 ## 库与 CLI
 
@@ -76,7 +76,7 @@ material_id 在一个知识库内全局唯一；候选的逻辑去重键为 `(sc
 
 未知字段、重复 JSON key、非法 UTF-8、BOM、孤立 surrogate、浮点数、NaN、Infinity 均拒绝。所有字段均必需，不隐式填补缺少的来源、条件或缺口数组。
 
-- 稳定 K ID 长 3–128 个 ASCII 字符，首字符为字母或数字，其余允许字母、数字、`.`、`_`、`:`、`/`、`-`。scope 最多 128 UTF-8 bytes。
+- 稳定 K ID 长 3–128 个 ASCII 字符，首字符为字母或数字，其余允许字母、数字、`.`、`_`、`:`、`/`、`-`。请求 `scope` 为非空、无 NUL、最多 256 UTF-8 bytes 的字符串；ASCII 名称最多 256 字符，非 ASCII 名称按 UTF-8 编码长度计，不按显示字符数计。
 - source_ref、task_ref、reviewer 最多 512 UTF-8 bytes，reason 最多 4096 bytes；字符串拒绝 NUL。task_ref 同时拒绝 U+0000–U+001F 和 U+007F 控制字符，与 Ledger 来源引用约束一致；在保存发布意图或写 Ledger 前检查。
 - `claimed_outcome` 为 SUCCEEDED、FAILED、CANCELLED 或 UNKNOWN，表示调用方声明，K 不验证外部任务执行事实。
 - `context`、`conditions` 为最多 16 项的字符串映射；键匹配 `[a-z][a-z0-9_]{0,31}`，值 1–256 UTF-8 bytes。
@@ -194,3 +194,9 @@ KnowledgeError 提供 code、message、commit_state、details；CLI 错误为同
 | `not_applicable` | 只读观察，不表示有写入被撤销 |
 
 CLI 成功退出 0，NOT_FOUND 为 3，CONFLICT/IDENTITY_CONFLICT 为 4，BUSY 为 6，其他领域错误为 2，文件/输出 I/O 失败为 1。成功或错误响应的写入、刷新失败均按 I/O 失败处理；已处理的 stdout 失败不会在解释器退出时再次刷新并覆盖退出码。进程被杀或输出管道失效可能没有完整 JSON；不能单凭退出码认定未提交，按原请求核对。
+
+## 作用域兼容性（0.1.0a3）
+
+请求接收、持久记录校验、回执查询及 pending/resume 统一支持 256 UTF-8 bytes 的作用域，超限在写入前拒绝。仅扩大 scope；稳定 ID 仍为 3–128 个 ASCII 字符。原请求哈希和候选去重组合保持不变，完整作用域参与身份计算，不截断或规范化名称。
+
+原有短作用域记录无需迁移或重发。长作用域写入后必须使用本版或兼容后续版本读取和恢复，旧版本的 128-byte 校验器不支持这类新记录。配套 P `0.1.0a6` 的请求作用域仍保留 ASCII 命名规则。

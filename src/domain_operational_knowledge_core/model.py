@@ -58,6 +58,10 @@ def identity(value):
     return value
 
 
+def request_scope(value):
+    return text(value, maximum=256)
+
+
 def fields(value, names):
     require(type(value) is dict and set(value) == set(names.split()), "Unexpected or missing fields")
 
@@ -146,7 +150,7 @@ def request(raw):
     value = decode(raw)
     fields(value, "schema scope operation request_id body")
     require(value["schema"] == SCHEMA, "Unsupported request schema", "UNSUPPORTED_VERSION")
-    text(value["scope"], maximum=128)
+    request_scope(value["scope"])
     identity(value["request_id"])
     operation, body = value["operation"], value["body"]
     validate_body(operation, body)
@@ -219,7 +223,7 @@ def material_body(request):
 
 
 def operation_key(scope, operation, request_id):
-    text(scope, maximum=128)
+    request_scope(scope)
     require(type(operation) is str and operation in OPERATIONS, "Unsupported operation")
     identity(request_id)
     return digest([scope, operation, request_id])

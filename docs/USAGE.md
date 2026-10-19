@@ -1,6 +1,6 @@
 # 安装与使用
 
-当前 `0.1.0a2` 为源码交付的 alpha；未发布 PyPI 包。验证环境为 Linux / Python 3.12。当前功能和限额见[公共接口](INTERFACE.md)。
+当前 `0.1.0a3` 为源码交付的 alpha；未发布 PyPI 包。验证环境为 Linux / Python 3.12。当前功能和限额见[公共接口](INTERFACE.md)。
 
 ## 安装
 
@@ -11,7 +11,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pip install setuptools==84.0.0 wheel==0.48.0
 .venv/bin/python -m pip wheel --no-build-isolation --no-deps /absolute/path/to/infra-artifact-ledger -w dist
 .venv/bin/python -m pip wheel --no-build-isolation --no-deps . -w dist
-.venv/bin/python -m pip install --no-index --find-links dist domain-operational-knowledge-core==0.1.0a2
+.venv/bin/python -m pip install --no-index --find-links dist domain-operational-knowledge-core==0.1.0a3
 ```
 
 运行时只依赖 Ledger 和 Python 标准库；无需 P、Local Hand、模型账户或网络服务。构建工具与 wheel 可以预先准备，安装后的本地调用可离线进行。

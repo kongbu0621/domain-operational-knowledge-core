@@ -32,7 +32,7 @@ def timestamp(value):
 
 def body(document, names, operation, scope="stored:validation"):
     value = {key: document[key] for key in names.split()}
-    m.text(scope, maximum=128)
+    m.request_scope(scope)
     m.validate_body(operation, value)
     return value
 
@@ -156,7 +156,7 @@ def document(db, table, identity):
         m.require(all(value["context"].get(k) == v for k,v in version["conditions"].items()), "Usage conditions differ")
     elif kind == "feedback":
         m.fields(value, "feedback_id usage_id version_id predecessor_id material_id scope recorded_at")
-        m.text(value["scope"], maximum=128)
+        m.request_scope(value["scope"])
         m.sha(row["fingerprint"])
         m.require(m.digest(value) == row["document_sha256"]
                   and all(row[k] == value[k] for k in ("usage_id", "predecessor_id", "material_id")), "Feedback binding differs")

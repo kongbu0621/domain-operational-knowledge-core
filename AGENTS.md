@@ -1,6 +1,6 @@
 # 维护与接续
 
-先读 [README](README.md)、[需求](docs/REQUIREMENTS.md)、[架构](docs/ARCHITECTURE.md)和[实施计划](docs/IMPLEMENTATION_PLAN.md)。当前 `0.1.0a2` 已实现独立库/CLI、Ledger 材料发布与引用、候选/审查、有效知识查询、准确版本使用/反馈、更正、修订/退休；接口见[公共接口](docs/INTERFACE.md)，安装与接续见[使用说明](docs/USAGE.md)。P 已经通过公共接口完成一次真实知识采用、候选验收和结果回流；已有真实试点的历史只读组合恢复已通过；反馈驱动的明确审查修订及本地文档交付的新版本采用/反馈已完成。真实退休、恢复副本受控启用及独立 Agent 消费仍待接续，不能据此宣称完整知识生命周期或 Ledger A3 完成。来源、验证和当前决定见[开发记录](docs/DEVELOPMENT.md)。
+先读 [README](README.md)、[需求](docs/REQUIREMENTS.md)、[架构](docs/ARCHITECTURE.md)和[实施计划](docs/IMPLEMENTATION_PLAN.md)。当前 `0.1.0a3` 已实现独立库/CLI、Ledger 材料发布与引用、候选/审查、有效知识查询、准确版本使用/反馈、更正、修订/退休；接口见[公共接口](docs/INTERFACE.md)，安装与接续见[使用说明](docs/USAGE.md)。P 已经通过公共接口完成一次真实知识采用、候选验收和结果回流；已有真实试点的历史只读组合恢复已通过；反馈驱动的明确审查修订及本地文档交付的新版本采用/反馈已完成。真实退休、恢复副本受控启用及独立 Agent 消费仍待接续，不能据此宣称完整知识生命周期或 Ledger A3 完成。来源、验证和当前决定见[开发记录](docs/DEVELOPMENT.md)。
 
 ## 当前方向
 
