@@ -79,6 +79,8 @@ operational-knowledge --store /absolute/private/knowledge read-material --id mat
 
 query 返回知识文本、准确版本和材料来源。read-material 返回经校验的 Base64 字节；Manifest 的 entry_key 只是逻辑键，不应直接拼接为输出路径。查询不是实际使用登记；开始采用前调用 start_use，完成后调用 complete_use，字段见[使用与反馈接口](INTERFACE.md#使用反馈和版本变更)。
 
+反馈说明应分别记录已有观察、实际采用和后续结果。材料可以在使用登记前取回；登记前已确定的方案，不能事后写成新知识带来的效果。登记后按准确版本执行并取得结果，也不自动证明该知识提高了成功率。若反馈的顺序或归因有误，用 `correct_feedback` 引用当前 `expected_feedback_id`，追加更正材料，保留原反馈和同一使用版本；不重做业务来修正文字记录。
+
 ## 中断后接续
 
 先使用原 scope、operation、request_id 核对成功记录：
