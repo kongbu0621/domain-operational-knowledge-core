@@ -1,5 +1,15 @@
 # 开发与接续记录
 
+## 真实试点的只读组合恢复（2026-10-19）
+
+Owner 接受继续推进后，P 沿已有真实知识采用任务完成一次 P/K/Ledger 历史只读恢复。现场复用 K `0.1.0a2`，九个模块与 `f44d21b932e03fb1d9443de3cf8a46818642936f` 一致；本仓产品未修改或升级。详细范围与保留证据结论集中在 P 的[组合恢复核对](https://github.com/kongbu0621/control-production-plane/blob/main/docs/COMBINED_RECOVERY.md)和[开发记录](https://github.com/kongbu0621/control-production-plane/blob/main/docs/DEVELOPMENT.md)。
+
+完整 K 冷目录与材料 Ledger 快照恢复后，通过公共接口核对原审查、准确版本、使用、反馈和材料实际字节，并与原 P 记录、另一 Ledger 中的任务成果对照。原数据一次、恢复副本两次对账一致；原存储和副本文件保持不变，没有生成新使用、反馈或业务。
+
+K 的绝对路径未重写。验收进程在独立挂载与网络命名空间内，把恢复数据库只读映射到原绑定路径；外部原目录保留，实际 inode 和拒绝写打开已核对。这只完成所选试点的历史核对，不是路径迁移、消费者切换或写实例隔离产品能力。原版本当前为 ACTIVE，但只读副本不因此取得新执行资格；未知的外部后续决定仍不能由快照自行排除。
+
+同步修正 README 与计划仍将 P 真实采用概括为“待实现”的旧状态。真实修订/退休循环、受控副本启用及独立 Agent 消费仍待接续，不将本次恢复计作整个第 4 步或 Ledger A3 完成。
+
 ## P／K／Ledger 组合恢复验证接续（2026-10-19）
 
 P 仓基于 `5d3fb156d61986a4339bd614e3f73cb928676a1b`、本仓 `94283790a2bb7b1ec55b341d7e07747a2e94ef0c` 和 Ledger `be50effeced6ba92d74f24bf5cb4478c9a65fc9d` 完成五个独立安装合成窗口：K 已提交/P 未确认的原回执补记、较旧 Ledger 材料缺口、K 旧快照遗漏后来退休、P 未知提交不重放，以及原 P 写入者与副本锁相互独立。可重复程序和操作顺序集中在 P 的[组合恢复核对](https://github.com/kongbu0621/control-production-plane/blob/main/docs/COMBINED_RECOVERY.md)，没有在 K 复制控制逻辑。
