@@ -236,6 +236,8 @@ operational-knowledge --store /absolute/private/knowledge resume --scope example
 
 调用器应区分启动前失败和进程启动后的通信错误；后者保留执行状态待核对，不能记作“未派发”。退出码为零也需核对响应是否符合本次预期状态；失败、待核对或其他任务的状态不能作为本次成功依据。
 
+响应编码损坏、存在重复 JSON 字段或无法完整解析时，保留原始输出并沿原请求核对，不能用替换解码后的文本或最后一个同名字段确认成功。诊断 stderr 与结构化 stdout 分别处理；诊断内容本身不替代回执和预期状态。
+
 resume 使用原持久输入核对和接续，不需重新提供文本。propose/propose_revision/review/register_material/start_use/retire 均为单次 K 事务，丢响应后用原请求查询或原样重试。不要换请求 ID、改内容或重跑生产任务来猜测旧写入结果。身份冲突保留原件，核对所选库和原请求。
 
 反馈 complete_use/correct_feedback 也走原请求接续；pending/resume 加 `--operation complete_use` 或 `--operation correct_feedback`，不能使用默认的 publish_material 去查询另一操作。
