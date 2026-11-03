@@ -2,7 +2,140 @@
 
 当前 `0.1.0a3` 为源码交付的 alpha；未发布 PyPI 包。验证环境为 Linux / Python 3.12。当前功能和限额见[公共接口](INTERFACE.md)。
 
+## 连接已有实例
+
+使用已有知识时，先从该实例的部署或接续配置确认运行环境、数据目录和原成功回执。它们与代码仓库分别管理：
+
+| 对象 | 保存什么 | 怎样选择 |
+| --- | --- | --- |
+| K 代码仓库 | 程序、接口与通用说明 | 用于开发和构建；拉取代码不等于更新运行安装 |
+| Python 虚拟环境 | 已安装的 K、Ledger 及依赖 | 使用该机器、该项目或运行角色已选定的解释器；目录不必叫 `.venv` |
+| K 数据目录 | 知识版本、审查、使用、反馈和原请求记录 | 从当前实例配置取得，作为 `--store`；不是源码目录或虚拟环境目录 |
+| Ledger 材料库 | 知识依据及反馈原文的准确版本 | 由既有 K 实例绑定；普通查询不需要重新指定或创建它 |
+
+同名项目在不同机器上可以使用不同路径。下面均为占位路径，须替换为本机已核实的选择。若数据在另一台机器或 VM 内，先通过已有获准连接到数据所在环境，再调用那里的库或 CLI；K 本身没有网络服务，宿主机的同名路径不自动指向 VM。运行资料与凭据留在私有配置中。
+
+```sh
+K_PYTHON=/absolute/path/to/selected-runtime/bin/python
+K_STORE=/absolute/private/existing-knowledge
+K_CONTEXT=/absolute/private/task-context.json
+```
+
+确认所选环境已安装兼容的 K/Ledger，运行用户有权访问该实例。可以用配置中保留的原 `scope`、`operation` 和 `request_id` 调用 `operation`，将返回回执的 `store_id` 与 `fingerprint` 同可信原记录比较；路径或一次成功响应不能单独证明实例选择正确。恢复副本还须按既有接续记录确认已选为当前实例，普通查询不会替用户完成切换。
+
+已有实例无需运行 `init`、重新建库或重新建立材料锚点。位置尚未确定时，记录“未配置/未定位”；不要把一个新空目录当成原知识库。首次安装见[安装](#安装)，首次建库见[使用现有 Ledger](#使用现有-ledger)。
+
+### 填写上下文并查询
+
+将真实任务的上下文保存为私有 JSON 文件，例如：
+
+```json
+{
+  "project": "example-component",
+  "task_type": "component-documentation"
+}
+```
+
+字段和值由调用者提供。查询要求 `kind` 相同，并且知识 `conditions` 中的每个键值都在 `context` 中精确匹配；上下文可以有额外字段。K 不从自然语言自动识别任务，也不做模糊语义匹配。例如，仅适用于 `component-documentation` 的知识不会匹配 `knowledge-entry-inspection`。这表示声明的适用条件未满足，不证明知识内容毫无参考价值；实际采用仍应核对原条件，不能仅为命中而改变任务标签。
+
+```sh
+"$K_PYTHON" -I -B -m domain_operational_knowledge_core --store "$K_STORE" \
+  query --kind feedback-attribution-guidance --context "$K_CONTEXT"
+```
+
+成功响应的 `data.versions` 包含知识文本、准确 `version_id`、适用条件、内容摘要、审查引用及已核对的材料来源。若 `data.next_after` 非空，使用同一类型和上下文，把游标传给 `--after` 继续读取；每页是一次观察，不构成跨页快照。
+
+| 结果 | 含义与后续处理 |
+| --- | --- |
+| 尚未配置或定位实例 | 调用尚未发生；先确定环境和当前实例，不能记作查询无匹配 |
+| 查询成功且 `data.versions` 为空 | 本次类型、上下文和分页位置没有匹配；不能推断整个库没有知识 |
+| 查询失败 | 保留退出码和错误，例如权限、材料不可读或实例不一致；修复后可有界重试原只读查询，不解释为空结果 |
+| 查询成功并命中 | 阅读内容、条件与来源，判断是否适用于实际工作；查询本身没有登记采用 |
+
+使用返回的准确 ID 读取版本及材料，下面的示例 ID 同样需要替换：
+
+```sh
+"$K_PYTHON" -I -B -m domain_operational_knowledge_core --store "$K_STORE" \
+  get --kind version --id version:returned-id
+"$K_PYTHON" -I -B -m domain_operational_knowledge_core --store "$K_STORE" \
+  read-material --id material:returned-id
+```
+
+`read-material` 返回经核对的 Base64 字节和准确材料引用。查询或读取成功证明本次可读，不等于已经采用，也不等于一次恢复或完整生产验收。
+
+### 登记采用与真实结果
+
+调用方确定要把知识用于后续实际工作后，通过 `write` 提交 `start_use`，在开始采用前取得回执。下面是请求字段示例：选择本任务自己的稳定请求/使用 ID，填入查询得到的准确版本，并保持真实任务上下文一致。
+
+```json
+{
+  "schema": "operational-knowledge-v1",
+  "scope": "example:independent-docs",
+  "operation": "start_use",
+  "request_id": "request:docs-start-001",
+  "body": {
+    "usage_id": "usage:docs-001",
+    "consumer_ref": "example:local-agent",
+    "task_ref": "task:docs-001",
+    "version_id": "version:returned-id",
+    "context": {
+      "project": "example-component",
+      "task_type": "component-documentation"
+    }
+  }
+}
+```
+
+保存为私有的 `start-use.json` 后调用：
+
+```sh
+"$K_PYTHON" -I -B -m domain_operational_knowledge_core --store "$K_STORE" \
+  write --request /absolute/private/start-use.json
+```
+
+K 会再次核对该版本仍为 ACTIVE、条件匹配且材料可读。回执只证明采用登记成功，不替代任务执行或行动授权。后续完成实际工作和核验后，使用同一 `usage_id` 提交 `complete_use`，其 `material.source_ref` 必须等于原 `consumer_ref`，`task_ref` 和 `context` 也必须与原使用一致。
+
+以下反馈仅示意字段，尚未代表任何真实工作完成。实际反馈应填写观察到的结果、检查、交付引用及知识的具体作用，不能照抄示例充当成功记录：
+
+```json
+{
+  "schema": "operational-knowledge-v1",
+  "scope": "example:independent-docs",
+  "operation": "complete_use",
+  "request_id": "request:docs-feedback-001",
+  "body": {
+    "usage_id": "usage:docs-001",
+    "material": {
+      "material_id": "material:docs-feedback-001",
+      "source_ref": "example:local-agent",
+      "task_ref": "task:docs-001",
+      "context": {
+        "project": "example-component",
+        "task_type": "component-documentation"
+      },
+      "claimed_outcome": "UNKNOWN",
+      "gaps": ["字段示例，尚未执行真实任务。"],
+      "text": "请替换为实际观察、验证和交付依据，以及该准确知识版本在工作中的具体作用。"
+    }
+  }
+}
+```
+
+```sh
+"$K_PYTHON" -I -B -m domain_operational_knowledge_core --store "$K_STORE" \
+  write --request /absolute/private/complete-use.json
+"$K_PYTHON" -I -B -m domain_operational_knowledge_core --store "$K_STORE" \
+  get --kind usage --id usage:docs-001
+```
+
+收到反馈回执后，可按其中的 `feedback_id`、`material_id` 读取记录和实际材料，核对它们仍关联原使用与准确知识版本。方案形成、采用、修改、检查、提交与发布应按实际顺序描述；登记前已确定的方案不能归因为后来采用的知识。一次成功也不证明知识提高了成功率。反馈成为运行材料，是否据此修订或准入知识仍须明确审查。
+
+响应丢失时先按原 `scope/operation/request_id` 查询回执或待决状态，再按[中断后接续](#中断后接续)处理。保留原请求，不换 ID 重做工作。上述流程可以由独立应用或本地 Agent 直接调用 K 公共接口完成，无需导入 P。
+
+
 ## 安装
+
+以下步骤适用于首次安装、且尚无选定环境的情况。已有可用环境时，沿用该机器和运行角色的实际路径，先按[连接已有实例](#连接已有实例)核对；`.venv` 只是下面的新安装示例。
 
 准备本仓和 `infra-artifact-ledger` 的源码。Ledger 采用 `0.2.0a1`，已验证提交 `be50effeced6ba92d74f24bf5cb4478c9a65fc9d`；不要用相同版本号替代对来源的核对。在 K 仓执行，替换 Ledger 路径：
 
