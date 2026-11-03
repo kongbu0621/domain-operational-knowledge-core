@@ -242,6 +242,8 @@ resume 使用原持久输入核对和接续，不需重新提供文本。propose
 
 如果 pending 只是读取失败诊断或生成报告失败，仍可使用原 scope/request_id 调用 resume；它会独立校验原意图及 Ledger 请求身份，不依赖诊断报告。原请求或成功回执绑定错误不会因此被绕过，已有失败记录保持原样。
 
+写入报错时还须查看 `commit_state`。若错误明确为 `committed` 且标识原请求，保留这项提交声明，再通过原 `operation` 核对回执及指纹，不因响应生成失败而再次执行写入。当前回执读不出时，分别记录提交声明与读取错误；回执或所需材料尚未核对完成，就不能报告当前核验通过。
+
 成功回执与材料当前可用性分开查看：历史已提交但 observation 显示 UNAVAILABLE/UNKNOWN 时，不据此认定旧操作失败或知识现在可以采用。缺库、损坏、权限或空间错误均不触发自动初始化。
 
 当前记录无法完整观察时，operation 仍可返回已经核对的原 receipt；observation.record_status 为 UNAVAILABLE 或 UNKNOWN，record/materials 为 null，error 说明此次观察失败。不要把“历史提交已确认”当作“当前内容可以使用”。
