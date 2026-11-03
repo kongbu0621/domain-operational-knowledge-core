@@ -230,6 +230,10 @@ operational-knowledge --store /absolute/private/knowledge pending --scope exampl
 operational-knowledge --store /absolute/private/knowledge resume --scope example:operator --request-id request:material-001
 ```
 
+恢复前先确认所选实例，并将回执的 `fingerprint` 或待决项的完整 `request` 与本地保留的原请求核对；同一个请求 ID 不保证两份输入内容相同。`resume` 使用库内已保存的请求；若调用方持有完整原请求，也可通过 `write --request` 原样接续，让公共写入接口在事务内再次校验内容绑定。不要只比较反馈正文，结果字段、上下文及其他字段同样属于原请求。
+
+`operation` 返回 NOT_FOUND 仅表示本次未查到已提交回执；材料发布或反馈还需检查对应 `pending`。本地 SSH 或调用进程超时、退出，不单独证明远端写入者已经停止；保留未知状态，核对原进程与原请求后再决定是否继续。不要将缺失回执解释为已经成功，也不要把它与知识查询的空匹配结果混用。
+
 resume 使用原持久输入核对和接续，不需重新提供文本。propose/propose_revision/review/register_material/start_use/retire 均为单次 K 事务，丢响应后用原请求查询或原样重试。不要换请求 ID、改内容或重跑生产任务来猜测旧写入结果。身份冲突保留原件，核对所选库和原请求。
 
 反馈 complete_use/correct_feedback 也走原请求接续；pending/resume 加 `--operation complete_use` 或 `--operation correct_feedback`，不能使用默认的 publish_material 去查询另一操作。
